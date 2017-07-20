@@ -77,6 +77,7 @@ public class FSWAL implements WAL {
         break;
       } catch (RemoteException e) {
         if (e.getClassName().equals(leaseException)) {
+          log.debug(e.toString());
           log.info("Cannot acquire lease on WAL {}", logFile);
           try {
             Thread.sleep(sleepIntervalMs);
