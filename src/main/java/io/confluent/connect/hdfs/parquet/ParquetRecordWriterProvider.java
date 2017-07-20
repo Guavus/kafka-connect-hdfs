@@ -28,6 +28,8 @@ import io.confluent.connect.avro.AvroData;
 import io.confluent.connect.hdfs.RecordWriterProvider;
 import io.confluent.connect.hdfs.RecordWriter;
 
+import org.slf4j.bridge.SLF4JBridgeHandler;
+
 public class ParquetRecordWriterProvider implements RecordWriterProvider {
 
   private final static String EXTENSION = ".parquet";
@@ -41,6 +43,11 @@ public class ParquetRecordWriterProvider implements RecordWriterProvider {
   public RecordWriter<SinkRecord> getRecordWriter(
       Configuration conf, final String fileName, SinkRecord record, final AvroData avroData)
       throws IOException {
+
+    java.util.logging.LogManager.getLogManager().reset();
+    SLF4JBridgeHandler.removeHandlersForRootLogger();
+    SLF4JBridgeHandler.install();
+
     final Schema avroSchema = avroData.fromConnectSchema(record.valueSchema());
     CompressionCodecName compressionCodecName = CompressionCodecName.SNAPPY;
 
