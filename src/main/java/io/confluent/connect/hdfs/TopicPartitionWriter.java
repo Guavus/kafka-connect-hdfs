@@ -31,17 +31,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Queue;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import io.confluent.connect.avro.AvroData;
 import io.confluent.connect.hdfs.errors.HiveMetaStoreException;
@@ -57,9 +51,14 @@ import io.confluent.connect.hdfs.wal.WAL;
 
 public class TopicPartitionWriter {
   private static final Logger log = LoggerFactory.getLogger(TopicPartitionWriter.class);
+
+  private static final int MAX_AVAILABLE = 1000;
+
+  private static final AtomicInteger available = new AtomicInteger(0);
+
   private WAL wal;
   private Map<String, String> tempFiles;
-  private Map<String, RecordWriter<SinkRecord>> writers;
+  private LinkedHashMap<String, RecordWriter<SinkRecord>> writers;
   private TopicPartition tp;
   private Partitioner partitioner;
   private String url;
@@ -113,18 +112,18 @@ public class TopicPartitionWriter {
   }
 
   public TopicPartitionWriter(
-      TopicPartition tp,
-      Storage storage,
-      RecordWriterProvider writerProvider,
-      Partitioner partitioner,
-      HdfsSinkConnectorConfig connectorConfig,
-      SinkTaskContext context,
-      AvroData avroData,
-      HiveMetaStore hiveMetaStore,
-      HiveUtil hive,
-      SchemaFileReader schemaFileReader,
-      ExecutorService executorService,
-      Queue<Future<Void>> hiveUpdateFutures) {
+          TopicPartition tp,
+          Storage storage,
+          RecordWriterProvider writerProvider,
+          Partitioner partitioner,
+          HdfsSinkConnectorConfig connectorConfig,
+          SinkTaskContext context,
+          final AvroData avroData,
+          HiveMetaStore hiveMetaStore,
+          HiveUtil hive,
+          SchemaFileReader schemaFileReader,
+          ExecutorService executorService,
+          Queue<Future<Void>> hiveUpdateFutures) {
     this.tp = tp;
     this.connectorConfig = connectorConfig;
     this.context = context;
@@ -148,7 +147,43 @@ public class TopicPartitionWriter {
     wal = storage.wal(logsDir, tp);
 
     buffer = new LinkedList<>();
-    writers = new HashMap<>();
+
+    writers = new LinkedHashMap<String, RecordWriter<SinkRecord>>(100, 0.75f, true) {
+
+      @Override
+      public void clear() {
+        available.addAndGet(-1 * this.size());
+        super.clear();
+      }
+
+      @Override
+      public RecordWriter<SinkRecord> remove(Object key) {
+        available.decrementAndGet();
+        return super.remove(key);
+      }
+
+      @Override
+      public RecordWriter<SinkRecord> put(String key, RecordWriter<SinkRecord> value) {
+        available.incrementAndGet();
+        return super.put(key, value);
+      }
+
+      @Override
+      protected boolean removeEldestEntry(Map.Entry<String, RecordWriter<SinkRecord>> entry) {
+        if (available.get() > MAX_AVAILABLE) {
+          try {
+            available.decrementAndGet();
+            entry.getValue().close();
+          } catch (IOException e) {
+            e.printStackTrace();
+          }
+          return true;
+        }
+        return false;
+      }
+    };
+
+    //writers = new HashMap<>();
     tempFiles = new HashMap<>();
     appended = new HashSet<>();
     startOffsets = new HashMap<>();
