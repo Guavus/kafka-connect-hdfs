@@ -17,8 +17,10 @@
 package io.confluent.connect.hdfs.avro;
 
 import org.apache.avro.file.DataFileWriter;
+import org.apache.avro.file.SeekableInput;
 import org.apache.avro.generic.GenericDatumWriter;
 import org.apache.avro.io.DatumWriter;
+import org.apache.avro.mapred.FsInput;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.Path;
@@ -45,16 +47,24 @@ public class AvroRecordWriterProvider implements RecordWriterProvider {
 
   @Override
   public RecordWriter<SinkRecord> getRecordWriter(Configuration conf, final String fileName,
-                                                        SinkRecord record, final AvroData avroData)
+                                                  SinkRecord record, final AvroData avroData)
       throws IOException {
     DatumWriter<Object> datumWriter = new GenericDatumWriter<>();
     final DataFileWriter<Object> writer = new DataFileWriter<>(datumWriter);
     Path path = new Path(fileName);
 
     final Schema schema = record.valueSchema();
-    final FSDataOutputStream out = path.getFileSystem(conf).create(path);
-    org.apache.avro.Schema avroSchema = avroData.fromConnectSchema(schema);
-    writer.create(avroSchema, out);
+
+    FSDataOutputStream out;
+
+    if (!path.getFileSystem(conf).exists(path)) {
+      out = path.getFileSystem(conf).create(path);
+      org.apache.avro.Schema avroSchema = avroData.fromConnectSchema(schema);
+      writer.create(avroSchema, out);
+    } else {
+      out = path.getFileSystem(conf).append(path);
+      writer.appendTo(new FsInput(path, conf), out);
+    }
 
     return new RecordWriter<SinkRecord>(){
       @Override
