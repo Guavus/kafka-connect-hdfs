@@ -14,11 +14,11 @@
 
 package io.confluent.connect.hdfs;
 
+import com.google.common.collect.Iterables;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.errors.IllegalWorkerStateException;
@@ -52,9 +52,9 @@ import io.confluent.connect.hdfs.wal.WAL;
 public class TopicPartitionWriter {
   private static final Logger log = LoggerFactory.getLogger(TopicPartitionWriter.class);
 
-  private static final int MAX_AVAILABLE = 1000;
+  private static final int MAX_OPEN_TEMP_FILES = 2000;
 
-  private static final AtomicInteger available = new AtomicInteger(0);
+  private static final AtomicInteger tempFileCount = new AtomicInteger(0);
 
   private WAL wal;
   private Map<String, String> tempFiles;
@@ -148,42 +148,8 @@ public class TopicPartitionWriter {
 
     buffer = new LinkedList<>();
 
-    writers = new LinkedHashMap<String, RecordWriter<SinkRecord>>(100, 0.75f, true) {
+    writers = new LinkedHashMap<>(100, 0.75f, true);
 
-      @Override
-      public void clear() {
-        available.addAndGet(-1 * this.size());
-        super.clear();
-      }
-
-      @Override
-      public RecordWriter<SinkRecord> remove(Object key) {
-        available.decrementAndGet();
-        return super.remove(key);
-      }
-
-      @Override
-      public RecordWriter<SinkRecord> put(String key, RecordWriter<SinkRecord> value) {
-        available.incrementAndGet();
-        return super.put(key, value);
-      }
-
-      @Override
-      protected boolean removeEldestEntry(Map.Entry<String, RecordWriter<SinkRecord>> entry) {
-        if (available.get() > MAX_AVAILABLE) {
-          try {
-            available.decrementAndGet();
-            entry.getValue().close();
-          } catch (IOException e) {
-            e.printStackTrace();
-          }
-          return true;
-        }
-        return false;
-      }
-    };
-
-    //writers = new HashMap<>();
     tempFiles = new HashMap<>();
     appended = new HashSet<>();
     startOffsets = new HashMap<>();
@@ -284,9 +250,11 @@ public class TopicPartitionWriter {
   @SuppressWarnings("fallthrough")
   public void write() {
     long now = System.currentTimeMillis();
+
     if (failureTime > 0 && now - failureTime < timeoutMs) {
       return;
     }
+
     if (state.compareTo(State.WRITE_STARTED) < 0) {
       boolean success = recover();
       if (!success) {
@@ -294,6 +262,7 @@ public class TopicPartitionWriter {
       }
       updateRotationTimers();
     }
+
     while(!buffer.isEmpty()) {
       try {
         switch (state) {
@@ -362,10 +331,13 @@ public class TopicPartitionWriter {
         break;
       }
     }
+
     if (buffer.isEmpty()) {
-      // committing files after waiting for rotateIntervalMs time but less than flush.size records available
+      // committing files after waiting for rotateIntervalMs time but less than flush.size records tempFileCount
       if (recordCounter > 0 && shouldRotate(now)) {
-        log.info("committing files after waiting for rotateIntervalMs time but less than flush.size records available.");
+        log.info("committing files after waiting for rotateIntervalMs time but less than flush.size records tempFileCount.");
+        log.info("There is {} open temp files", tempFileCount.get());
+
         updateRotationTimers();
 
         try {
@@ -401,6 +373,7 @@ public class TopicPartitionWriter {
       }
     }
 
+    tempFileCount.addAndGet(-1 * writers.size());
     writers.clear();
 
     try {
@@ -492,6 +465,7 @@ public class TopicPartitionWriter {
       String tempFile = getTempFile(encodedPartition);
       RecordWriter<SinkRecord> writer = writerProvider.getRecordWriter(conf, tempFile, record, avroData);
       writers.put(encodedPartition, writer);
+      tempFileCount.incrementAndGet();
       if (hiveIntegration && !hivePartitions.contains(encodedPartition)) {
         addHivePartition(encodedPartition);
         hivePartitions.add(encodedPartition);
@@ -569,6 +543,12 @@ public class TopicPartitionWriter {
     RecordWriter<SinkRecord> writer = getWriter(record, encodedPartition);
     writer.write(record);
 
+    // Remove eldest entry if we busted the maximum
+    if (tempFileCount.get() >= MAX_OPEN_TEMP_FILES) {
+       String key = Iterables.get(writers.keySet(), 0);
+       closeTempFile(key);
+    }
+
     if (!startOffsets.containsKey(encodedPartition)) {
       startOffsets.put(encodedPartition, record.kafkaOffset());
       offsets.put(encodedPartition, record.kafkaOffset());
@@ -583,6 +563,7 @@ public class TopicPartitionWriter {
       RecordWriter<SinkRecord> writer = writers.get(encodedPartition);
       writer.close();
       writers.remove(encodedPartition);
+      tempFileCount.decrementAndGet();
     }
   }
 
