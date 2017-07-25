@@ -613,6 +613,10 @@ public class TopicPartitionWriter {
 
   private void commitFile() throws IOException {
     appended.clear();
+
+    offset = offset + recordCounter;
+    recordCounter = 0;
+
     for (String encodedPartition: tempFiles.keySet()) {
       commitFile(encodedPartition);
     }
@@ -636,8 +640,7 @@ public class TopicPartitionWriter {
     }
     storage.commit(tempFile, committedFile);
     startOffsets.remove(encodedPartiton);
-    offset = offset + recordCounter;
-    recordCounter = 0;
+
     log.info("Committed {} for {}", committedFile, tp);
   }
 
