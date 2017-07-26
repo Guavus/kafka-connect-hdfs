@@ -14,6 +14,7 @@
 
 package io.confluent.connect.hdfs.avro;
 
+import io.confluent.connect.hdfs.*;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.kafka.connect.data.Schema;
@@ -32,13 +33,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
-import io.confluent.connect.hdfs.FileUtils;
-import io.confluent.connect.hdfs.Format;
-import io.confluent.connect.hdfs.HdfsSinkConnectorConfig;
-import io.confluent.connect.hdfs.RecordWriterProvider;
-import io.confluent.connect.hdfs.SchemaFileReader;
-import io.confluent.connect.hdfs.TestWithMiniDFSCluster;
-import io.confluent.connect.hdfs.TopicPartitionWriter;
 import io.confluent.connect.hdfs.filter.CommittedFileFilter;
 import io.confluent.connect.hdfs.partitioner.DefaultPartitioner;
 import io.confluent.connect.hdfs.partitioner.FieldPartitioner;
@@ -84,7 +78,7 @@ public class TopicPartitionWriterTest extends TestWithMiniDFSCluster {
     connectorProps.put(HdfsSinkConnectorConfig.FILENAME_OFFSET_ZERO_PAD_WIDTH_CONFIG, "2");
     configureConnector();
     TopicPartitionWriter topicPartitionWriter = new TopicPartitionWriter(
-        TOPIC_PARTITION, storage, writerProvider, partitioner,  connectorConfig, context, avroData);
+        TOPIC_PARTITION, storage, writerProvider, partitioner, connectorConfig, context, avroData, new TempFileLimiter(connectorConfig));
 
     String key = "key";
     Schema schema = createSchema();
@@ -120,7 +114,7 @@ public class TopicPartitionWriterTest extends TestWithMiniDFSCluster {
     String partitionField = (String) config.get(HdfsSinkConnectorConfig.PARTITION_FIELD_NAME_CONFIG);
 
     TopicPartitionWriter topicPartitionWriter = new TopicPartitionWriter(
-        TOPIC_PARTITION, storage, writerProvider, partitioner, connectorConfig, context, avroData);
+        TOPIC_PARTITION, storage, writerProvider, partitioner, connectorConfig, context, avroData, new TempFileLimiter(connectorConfig));
 
     String key = "key";
     Schema schema = createSchema();
@@ -156,7 +150,7 @@ public class TopicPartitionWriterTest extends TestWithMiniDFSCluster {
     partitioner.configure(config);
 
     TopicPartitionWriter topicPartitionWriter = new TopicPartitionWriter(
-        TOPIC_PARTITION, storage, writerProvider, partitioner, connectorConfig, context, avroData);
+        TOPIC_PARTITION, storage, writerProvider, partitioner, connectorConfig, context, avroData, new TempFileLimiter(connectorConfig));
 
     String key = "key";
     Schema schema = createSchema();

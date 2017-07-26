@@ -61,11 +61,6 @@ import io.confluent.connect.hdfs.wal.WAL;
 public class TopicPartitionWriter {
   private static final Logger log = LoggerFactory.getLogger(TopicPartitionWriter.class);
 
-  // TODO: Add a global connector config
-  private static final int MAX_OPEN_TEMP_FILES = 2000;
-
-  private static final AtomicInteger tempFileCount = new AtomicInteger(0);
-
   private WAL wal;
   private Map<String, String> tempFiles;
   private LinkedHashMap<String, RecordWriter<SinkRecord>> writers;
@@ -111,6 +106,7 @@ public class TopicPartitionWriter {
   private Set<String> hivePartitions;
 
   private boolean appendOnCommit;
+  private TempFileLimiter tempFileLimiter;
 
   private Map<String, String> previousCommitFiles = null;
 
@@ -121,8 +117,9 @@ public class TopicPartitionWriter {
       Partitioner partitioner,
       HdfsSinkConnectorConfig connectorConfig,
       SinkTaskContext context,
-      AvroData avroData) {
-    this(tp, storage, writerProvider, partitioner, connectorConfig, context, avroData, null, null, null, null, null);
+      AvroData avroData,
+      TempFileLimiter tempFileLimiter) {
+    this(tp, storage, writerProvider, partitioner, connectorConfig, context, avroData, tempFileLimiter, null, null, null, null, null);
   }
 
   public TopicPartitionWriter(
@@ -133,6 +130,7 @@ public class TopicPartitionWriter {
           HdfsSinkConnectorConfig connectorConfig,
           SinkTaskContext context,
           final AvroData avroData,
+          TempFileLimiter tempFileLimiter,
           HiveMetaStore hiveMetaStore,
           HiveUtil hive,
           SchemaFileReader schemaFileReader,
@@ -148,6 +146,7 @@ public class TopicPartitionWriter {
     this.url = storage.url();
     this.conf = storage.conf();
     this.schemaFileReader = schemaFileReader;
+    this.tempFileLimiter = tempFileLimiter;
 
     topicsDir = connectorConfig.getString(HdfsSinkConnectorConfig.TOPICS_DIR_CONFIG);
     flushSize = connectorConfig.getInt(HdfsSinkConnectorConfig.FLUSH_SIZE_CONFIG);
@@ -352,7 +351,7 @@ public class TopicPartitionWriter {
       // committing files after waiting for rotateIntervalMs time but less than flush.size records tempFileCount
       if (recordCounter > 0 && shouldRotate(now)) {
         log.info("committing files after waiting for rotateIntervalMs time but less than flush.size records tempFileCount.");
-        log.info("There is {} open temp files", tempFileCount.get());
+        log.info("There is {} open temp files", tempFileLimiter.get());
 
         updateRotationTimers();
 
@@ -389,7 +388,7 @@ public class TopicPartitionWriter {
       }
     }
 
-    tempFileCount.addAndGet(-1 * writers.size());
+    tempFileLimiter.removeMany(writers.size());
     writers.clear();
 
     try {
@@ -481,7 +480,7 @@ public class TopicPartitionWriter {
       String tempFile = getTempFile(encodedPartition);
       RecordWriter<SinkRecord> writer = writerProvider.getRecordWriter(conf, tempFile, record, avroData);
       writers.put(encodedPartition, writer);
-      tempFileCount.incrementAndGet();
+      tempFileLimiter.increment();
       if (hiveIntegration && !hivePartitions.contains(encodedPartition)) {
         addHivePartition(encodedPartition);
         hivePartitions.add(encodedPartition);
@@ -560,7 +559,7 @@ public class TopicPartitionWriter {
     writer.write(record);
 
     // Remove eldest entry if we busted the maximum
-    if (tempFileCount.get() >= MAX_OPEN_TEMP_FILES) {
+    if (tempFileLimiter.isBusted()) {
        String key = Iterables.get(writers.keySet(), 0);
        closeTempFile(key);
     }
@@ -579,7 +578,7 @@ public class TopicPartitionWriter {
       RecordWriter<SinkRecord> writer = writers.get(encodedPartition);
       writer.close();
       writers.remove(encodedPartition);
-      tempFileCount.decrementAndGet();
+      tempFileLimiter.decrement();
     }
   }
 
