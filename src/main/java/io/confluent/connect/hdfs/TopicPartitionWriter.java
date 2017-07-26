@@ -61,6 +61,7 @@ import io.confluent.connect.hdfs.wal.WAL;
 public class TopicPartitionWriter {
   private static final Logger log = LoggerFactory.getLogger(TopicPartitionWriter.class);
 
+  // TODO: Add a global connector config
   private static final int MAX_OPEN_TEMP_FILES = 2000;
 
   private static final AtomicInteger tempFileCount = new AtomicInteger(0);
@@ -109,10 +110,9 @@ public class TopicPartitionWriter {
   private Queue<Future<Void>> hiveUpdateFutures;
   private Set<String> hivePartitions;
 
-  private boolean appendOnCommit = true;
+  private boolean appendOnCommit;
 
   private Map<String, String> previousCommitFiles = null;
-
 
   public TopicPartitionWriter(
       TopicPartition tp,
@@ -156,6 +156,7 @@ public class TopicPartitionWriter {
     timeoutMs = connectorConfig.getLong(HdfsSinkConnectorConfig.RETRY_BACKOFF_CONFIG);
     compatibility = SchemaUtils.getCompatibility(
         connectorConfig.getString(HdfsSinkConnectorConfig.SCHEMA_COMPATIBILITY_CONFIG));
+    appendOnCommit = connectorConfig.getBoolean(HdfsSinkConnectorConfig.APPEND_PARTITIONS_ON_COMMIT_CONFIG);
 
     String logsDir = connectorConfig.getString(HdfsSinkConnectorConfig.LOGS_DIR_CONFIG);
     wal = storage.wal(logsDir, tp);

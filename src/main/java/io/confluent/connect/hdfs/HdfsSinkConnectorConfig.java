@@ -226,6 +226,25 @@ public class HdfsSinkConnectorConfig extends AbstractConfig {
   public static final int FILENAME_OFFSET_ZERO_PAD_WIDTH_DEFAULT = 10;
   private static final String FILENAME_OFFSET_ZERO_PAD_WIDTH_DISPLAY = "Filename Offset Zero Pad Width";
 
+  public static final String APPEND_PARTITIONS_ON_COMMIT_CONFIG = "append.on.commit";
+  private static final String APPEND_PARTITIONS_ON_COMMIT_DOC =
+      "Instead of creating a new file on HDFS every time the connector flush," +
+        "append (if possible) to the older file for the same partitions instead." +
+          "NOTE: This will rename the older files to replace them with the newer ones. " +
+              "If you query this path during a commit the data might be get file not found error.";
+
+  public static final boolean APPEND_PARTITIONS_ON_COMMIT_DEFAULT = false;
+  private static final String APPEND_PARTITIONS_ON_COMMIT_DISPLAY = "Merge Contiguous Files";
+
+  public static final String MAX_TEMP_FILES_CONFIG = "max.tmp.files";
+  private static final String MAX_TEMP_FILES_DOC =
+      "Limit the number of tmp files. Once over the limit the least-recently-used " +
+          "file will be closed and reopened for append if needed later." +
+              "(Only supported by Avro for now, other format will throw an error.";
+
+  public static final int MAX_TEMP_FILES_DEFAULT = 1000;
+  private static final String MAX_TEMP_FILES_DISPLAY = "Max Temporary Files";
+
   // Schema group
   public static final String SCHEMA_COMPATIBILITY_CONFIG = "schema.compatibility";
   private static final String SCHEMA_COMPATIBILITY_DOC =
@@ -315,7 +334,12 @@ public class HdfsSinkConnectorConfig extends AbstractConfig {
         .define(LOCALE_CONFIG, Type.STRING, LOCALE_DEFAULT, Importance.MEDIUM, LOCALE_DOC, CONNECTOR_GROUP, 10, Width.MEDIUM, LOCALE_DISPLAY, partitionerClassDependentsRecommender)
         .define(TIMEZONE_CONFIG, Type.STRING, TIMEZONE_DEFAULT, Importance.MEDIUM, TIMEZONE_DOC, CONNECTOR_GROUP, 11, Width.MEDIUM, TIMEZONE_DISPLAY, partitionerClassDependentsRecommender)
         .define(FILENAME_OFFSET_ZERO_PAD_WIDTH_CONFIG, Type.INT, FILENAME_OFFSET_ZERO_PAD_WIDTH_DEFAULT, ConfigDef.Range.atLeast(0), Importance.LOW, FILENAME_OFFSET_ZERO_PAD_WIDTH_DOC,
-                CONNECTOR_GROUP, 12, Width.SHORT, FILENAME_OFFSET_ZERO_PAD_WIDTH_DISPLAY);
+                CONNECTOR_GROUP, 12, Width.SHORT, FILENAME_OFFSET_ZERO_PAD_WIDTH_DISPLAY)
+        .define(APPEND_PARTITIONS_ON_COMMIT_CONFIG, Type.BOOLEAN, APPEND_PARTITIONS_ON_COMMIT_DEFAULT, Importance.LOW, APPEND_PARTITIONS_ON_COMMIT_DOC,
+                CONNECTOR_GROUP, 13, Width.SHORT, APPEND_PARTITIONS_ON_COMMIT_DISPLAY)
+        .define(MAX_TEMP_FILES_CONFIG, Type.INT, MAX_TEMP_FILES_DEFAULT, ConfigDef.Range.atLeast(0), Importance.LOW, MAX_TEMP_FILES_DOC,
+                CONNECTOR_GROUP, 14, Width.SHORT, MAX_TEMP_FILES_DISPLAY);
+
 
     // Define Internal configuration group
     config.define(STORAGE_CLASS_CONFIG, Type.STRING, STORAGE_CLASS_DEFAULT, Importance.LOW, STORAGE_CLASS_DOC, INTERNAL_GROUP, 1, Width.MEDIUM, STORAGE_CLASS_DISPLAY);
