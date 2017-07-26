@@ -32,4 +32,7 @@ public class TempFileLimiter {
     return tempFileCount.get() >= maxOpenTempFiles;
   }
 
+  public int getMaxOpenTempFiles() {
+    return maxOpenTempFiles;
+  }
 }

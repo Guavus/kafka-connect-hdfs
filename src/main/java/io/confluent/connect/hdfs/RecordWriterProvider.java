@@ -23,5 +23,13 @@ import io.confluent.connect.avro.AvroData;
 
 public interface RecordWriterProvider {
   String getExtension();
+
+  /**
+   * Return whatever this provider support being reopened (same file, for appends)
+   */
+  boolean supportAppends();
+
+  void appendToFile(String tempFile, String previousCommitFile) throws IOException, UnsupportedOperationException;
+
   RecordWriter<SinkRecord> getRecordWriter(Configuration conf, String fileName, SinkRecord record, AvroData avroData) throws IOException;
 }

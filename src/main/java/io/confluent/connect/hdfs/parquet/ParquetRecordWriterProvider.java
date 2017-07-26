@@ -40,6 +40,16 @@ public class ParquetRecordWriterProvider implements RecordWriterProvider {
   }
 
   @Override
+  public boolean supportAppends() {
+    return false;
+  }
+
+  @Override
+  public void appendToFile(String tempFile, String previousCommitFile) throws IOException, UnsupportedOperationException {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
   public RecordWriter<SinkRecord> getRecordWriter(
       Configuration conf, final String fileName, SinkRecord record, final AvroData avroData)
       throws IOException {

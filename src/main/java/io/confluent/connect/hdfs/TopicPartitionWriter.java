@@ -15,15 +15,8 @@
 package io.confluent.connect.hdfs;
 
 import com.google.common.collect.Iterables;
-import org.apache.avro.file.DataFileReader;
-import org.apache.avro.file.DataFileWriter;
-import org.apache.avro.generic.GenericDatumReader;
-import org.apache.avro.generic.GenericDatumWriter;
-import org.apache.avro.io.DatumReader;
-import org.apache.avro.io.DatumWriter;
-import org.apache.avro.mapred.FsInput;
+
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.kafka.common.TopicPartition;
@@ -39,12 +32,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import io.confluent.connect.avro.AvroData;
 import io.confluent.connect.hdfs.errors.HiveMetaStoreException;
@@ -156,6 +147,9 @@ public class TopicPartitionWriter {
     compatibility = SchemaUtils.getCompatibility(
         connectorConfig.getString(HdfsSinkConnectorConfig.SCHEMA_COMPATIBILITY_CONFIG));
     appendOnCommit = connectorConfig.getBoolean(HdfsSinkConnectorConfig.APPEND_PARTITIONS_ON_COMMIT_CONFIG);
+
+    if (appendOnCommit && !writerProvider.supportAppends())
+      throw new ConnectException(String.format("%s is on, but a writerProvider (%s) that doesn't support appends, is being used", HdfsSinkConnectorConfig.APPEND_PARTITIONS_ON_COMMIT_CONFIG, writerProvider.getClass().getName()));
 
     String logsDir = connectorConfig.getString(HdfsSinkConnectorConfig.LOGS_DIR_CONFIG);
     wal = storage.wal(logsDir, tp);
@@ -560,8 +554,13 @@ public class TopicPartitionWriter {
 
     // Remove eldest entry if we busted the maximum
     if (tempFileLimiter.isBusted()) {
-       String key = Iterables.get(writers.keySet(), 0);
-       closeTempFile(key);
+
+      if (writerProvider.supportAppends()) {
+        String key = Iterables.get(writers.keySet(), 0);
+        closeTempFile(key);
+      } else {
+        throw new ConnectException(String.format("The connector hit the maximum temp file limit %d, but the writerProvider doesn't support append (re-open). Can't continue.", tempFileLimiter.getMaxOpenTempFiles()));
+      }
     }
 
     if (!startOffsets.containsKey(encodedPartition)) {
@@ -642,24 +641,6 @@ public class TopicPartitionWriter {
     }
   }
 
-  private void appendToFile(String tempFile, String previousCommitFile) throws IOException {
-    Path tempFilePath = new Path(tempFile);
-    Path previousCommitFilePath = new Path(previousCommitFile);
-
-    DatumWriter<Object> datumWriter = new GenericDatumWriter<>();
-    final DataFileWriter<Object> writer = new DataFileWriter<>(datumWriter);
-
-    DatumReader<Object> datumReader = new GenericDatumReader<>();
-    final DataFileReader<Object> reader = new DataFileReader<>(new FsInput(tempFilePath, conf), datumReader);
-
-    FSDataOutputStream out = previousCommitFilePath.getFileSystem(conf).append(previousCommitFilePath);
-    writer.appendTo(new FsInput(previousCommitFilePath, conf), out);
-
-    writer.appendAllFrom(reader, false);
-
-    writer.close();
-  }
-
   private boolean shouldAppend(String encodedPartition) {
     return appendOnCommit && previousCommitFiles.get(encodedPartition) != null;
   }
@@ -709,6 +690,7 @@ public class TopicPartitionWriter {
       log.info("Committed {} for {}", committedFile, tp);
     } else {
       // Append commit
+
       String previousCommitFile = previousCommitFiles.get(encodedPartition);
 
       // Override committed file name
@@ -718,7 +700,7 @@ public class TopicPartitionWriter {
       storage.commit(previousCommitFile, committedFile);
 
       // Append the temp file (TODO: check schema)
-      appendToFile(tempFile, committedFile);
+      writerProvider.appendToFile(tempFile, committedFile);
 
       // Mark write as complete
       storage.delete(tempFile);
