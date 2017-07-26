@@ -15,7 +15,15 @@
 package io.confluent.connect.hdfs;
 
 import com.google.common.collect.Iterables;
+import org.apache.avro.file.DataFileReader;
+import org.apache.avro.file.DataFileWriter;
+import org.apache.avro.generic.GenericDatumReader;
+import org.apache.avro.generic.GenericDatumWriter;
+import org.apache.avro.io.DatumReader;
+import org.apache.avro.io.DatumWriter;
+import org.apache.avro.mapred.FsInput;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.kafka.common.TopicPartition;
@@ -31,6 +39,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
@@ -100,6 +109,11 @@ public class TopicPartitionWriter {
   private Queue<Future<Void>> hiveUpdateFutures;
   private Set<String> hivePartitions;
 
+  private boolean appendOnCommit = true;
+
+  private Map<String, String> previousCommitFiles = null;
+
+
   public TopicPartitionWriter(
       TopicPartition tp,
       Storage storage,
@@ -151,6 +165,7 @@ public class TopicPartitionWriter {
     writers = new LinkedHashMap<>(100, 0.75f, true);
 
     tempFiles = new HashMap<>();
+    previousCommitFiles = new HashMap<>();
     appended = new HashSet<>();
     startOffsets = new HashMap<>();
     offsets = new HashMap<>();
@@ -622,6 +637,29 @@ public class TopicPartitionWriter {
     }
   }
 
+  private void simpleFileCommit(String tempFile, String committedFile) throws IOException {
+    storage.commit(tempFile, committedFile);
+    log.info("Committed {} for {}", committedFile, tp);
+  }
+
+  private void appendToFile(String tempFile, String previousCommitFile) throws IOException {
+    Path tempFilePath = new Path(tempFile);
+    Path previousCommitFilePath = new Path(previousCommitFile);
+
+    DatumWriter<Object> datumWriter = new GenericDatumWriter<>();
+    final DataFileWriter<Object> writer = new DataFileWriter<>(datumWriter);
+
+    DatumReader<Object> datumReader = new GenericDatumReader<>();
+    final DataFileReader<Object> reader = new DataFileReader<>(new FsInput(tempFilePath, conf), datumReader);
+
+    FSDataOutputStream out = previousCommitFilePath.getFileSystem(conf).append(previousCommitFilePath);
+    writer.appendTo(new FsInput(previousCommitFilePath, conf), out);
+
+    writer.appendAllFrom(reader, false);
+
+    writer.close();
+  }
+  
   private void commitFile(String encodedPartiton) throws IOException {
     if (!startOffsets.containsKey(encodedPartiton)) {
       return;
@@ -638,10 +676,42 @@ public class TopicPartitionWriter {
     if (!storage.exists(directoryName)) {
       storage.mkdirs(directoryName);
     }
-    storage.commit(tempFile, committedFile);
-    startOffsets.remove(encodedPartiton);
 
-    log.info("Committed {} for {}", committedFile, tp);
+    if (!appendOnCommit) {
+      simpleFileCommit(tempFile, committedFile);
+    } else {
+
+      String previousCommitFile = previousCommitFiles.get(encodedPartiton);
+
+      if (previousCommitFile != null) {
+
+      // Append the temp file (TODO: check schema)
+      appendToFile(tempFile, committedFile);
+
+        // Override committed file name
+        committedFile = FileUtils.committedFileName(url, topicsDir, directory, tp,
+                                                    previousStartOffset, endOffset, extension,
+                                                    zeroPadOffsetFormat);
+
+        // Rename previous to newCommitted
+        storage.commit(previousCommitFile, committedFile);
+
+        // Append the temp file (TODO: check schema)
+        appendToFile(tempFile, previousCommitFile);
+
+        // Mark write as complete
+        storage.delete(tempFile);
+
+        log.info("Committed (append-commit) {} for {}", committedFile, tp);
+      } else {
+        // No previous file, simple commit the temp file
+        simpleFileCommit(tempFile, committedFile);
+      }
+
+      previousCommitFiles.put(encodedPartiton, committedFile);
+    }
+
+    startOffsets.remove(encodedPartiton);
   }
 
   private void deleteTempFile(String encodedPartiton) throws IOException {
