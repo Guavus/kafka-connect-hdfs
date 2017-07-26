@@ -82,6 +82,7 @@ public class TopicPartitionWriter {
   private long failureTime;
   private Compatibility compatibility;
   private Schema currentSchema;
+  private Schema previousSchema;
   private HdfsSinkConnectorConfig connectorConfig;
   private String extension;
   private final String zeroPadOffsetFormat;
@@ -99,7 +100,7 @@ public class TopicPartitionWriter {
   private boolean appendOnCommit;
   private TempFileLimiter tempFileLimiter;
 
-  private Map<String, String> previousCommitFiles = null;
+  private Map<String, String> previousCommitFiles;
 
   public TopicPartitionWriter(
       TopicPartition tp,
@@ -598,7 +599,7 @@ public class TopicPartitionWriter {
 
     String committedFile;
 
-    if (shouldAppend(encodedPartition)) {
+    if (!shouldAppend(encodedPartition)) {
       committedFile = committedFileName(encodedPartition);
     }
     else {
@@ -639,10 +640,12 @@ public class TopicPartitionWriter {
     for (String encodedPartition: tempFiles.keySet()) {
       commitFile(encodedPartition);
     }
+
+    previousSchema = currentSchema;
   }
 
   private boolean shouldAppend(String encodedPartition) {
-    return appendOnCommit && previousCommitFiles.get(encodedPartition) != null;
+    return appendOnCommit && previousCommitFiles.get(encodedPartition) != null && previousSchema.equals(currentSchema);
   }
 
   private String committedFileName(String encodedPartiton) {
@@ -682,10 +685,12 @@ public class TopicPartitionWriter {
       storage.mkdirs(directoryName);
     }
 
+    String committedFile;
+
     if (!shouldAppend(encodedPartition)) {
       // Simple commit
 
-      String committedFile = committedFileName(encodedPartition);
+      committedFile  = committedFileName(encodedPartition);
       storage.commit(tempFile, committedFile);
       log.info("Committed {} for {}", committedFile, tp);
     } else {
@@ -694,7 +699,7 @@ public class TopicPartitionWriter {
       String previousCommitFile = previousCommitFiles.get(encodedPartition);
 
       // Override committed file name
-      String committedFile = committedFileNameForAppend(previousCommitFile, encodedPartition);
+      committedFile = committedFileNameForAppend(previousCommitFile, encodedPartition);
 
       // Rename previous to newCommitted
       storage.commit(previousCommitFile, committedFile);
@@ -706,9 +711,9 @@ public class TopicPartitionWriter {
       storage.delete(tempFile);
 
       log.info("Committed (append-commit) {} for {}", committedFile, tp);
-
-      previousCommitFiles.put(encodedPartition, committedFile);
     }
+
+    previousCommitFiles.put(encodedPartition, committedFile);
 
     startOffsets.remove(encodedPartition);
   }
