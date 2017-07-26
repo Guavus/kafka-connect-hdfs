@@ -596,12 +596,17 @@ public class TopicPartitionWriter {
     if (!startOffsets.containsKey(encodedPartition)) {
       return;
     }
-    long startOffset = startOffsets.get(encodedPartition);
-    long endOffset = offsets.get(encodedPartition);
-    String directory = getDirectory(encodedPartition);
-    String committedFile = FileUtils.committedFileName(url, topicsDir, directory, tp,
-                                                       startOffset, endOffset, extension,
-                                                       zeroPadOffsetFormat);
+
+    String committedFile;
+
+    if (shouldAppend(encodedPartition)) {
+      committedFile = committedFileName(encodedPartition);
+    }
+    else {
+      String previousCommitFile = previousCommitFiles.get(encodedPartition);
+      committedFile = committedFileNameForAppend(previousCommitFile, encodedPartition);
+    }
+
     wal.append(tempFile, committedFile);
     appended.add(tempFile);
   }
@@ -637,11 +642,6 @@ public class TopicPartitionWriter {
     }
   }
 
-  private void simpleFileCommit(String tempFile, String committedFile) throws IOException {
-    storage.commit(tempFile, committedFile);
-    log.info("Committed {} for {}", committedFile, tp);
-  }
-
   private void appendToFile(String tempFile, String previousCommitFile) throws IOException {
     Path tempFilePath = new Path(tempFile);
     Path previousCommitFilePath = new Path(previousCommitFile);
@@ -659,59 +659,76 @@ public class TopicPartitionWriter {
 
     writer.close();
   }
-  
-  private void commitFile(String encodedPartiton) throws IOException {
-    if (!startOffsets.containsKey(encodedPartiton)) {
-      return;
-    }
+
+  private boolean shouldAppend(String encodedPartition) {
+    return appendOnCommit && previousCommitFiles.get(encodedPartition) != null;
+  }
+
+  private String committedFileName(String encodedPartiton) {
     long startOffset = startOffsets.get(encodedPartiton);
     long endOffset = offsets.get(encodedPartiton);
-    String tempFile = tempFiles.get(encodedPartiton);
     String directory = getDirectory(encodedPartiton);
     String committedFile = FileUtils.committedFileName(url, topicsDir, directory, tp,
                                                        startOffset, endOffset, extension,
                                                        zeroPadOffsetFormat);
+
+    return committedFile;
+  }
+
+  private String committedFileNameForAppend(String previousCommitFile, String encodedPartiton) {
+
+    long previousStartOffset = FileUtils.extractStartOffset(new Path(previousCommitFile).getName());
+    long endOffset = offsets.get(encodedPartiton);
+    String directory = getDirectory(encodedPartiton);
+    String committedFile = FileUtils.committedFileName(url, topicsDir, directory, tp,
+                                                       previousStartOffset, endOffset, extension,
+                                                       zeroPadOffsetFormat);
+
+    return committedFile;
+  }
+
+  private void commitFile(String encodedPartition) throws IOException {
+    if (!startOffsets.containsKey(encodedPartition)) {
+      return;
+    }
+
+    String directory = getDirectory(encodedPartition);
+
+    String tempFile = tempFiles.get(encodedPartition);
 
     String directoryName = FileUtils.directoryName(url, topicsDir, directory);
     if (!storage.exists(directoryName)) {
       storage.mkdirs(directoryName);
     }
 
-    if (!appendOnCommit) {
-      simpleFileCommit(tempFile, committedFile);
+    if (!shouldAppend(encodedPartition)) {
+      // Simple commit
+
+      String committedFile = committedFileName(encodedPartition);
+      storage.commit(tempFile, committedFile);
+      log.info("Committed {} for {}", committedFile, tp);
     } else {
+      // Append commit
+      String previousCommitFile = previousCommitFiles.get(encodedPartition);
 
-      String previousCommitFile = previousCommitFiles.get(encodedPartiton);
+      // Override committed file name
+      String committedFile = committedFileNameForAppend(previousCommitFile, encodedPartition);
 
-      if (previousCommitFile != null) {
+      // Rename previous to newCommitted
+      storage.commit(previousCommitFile, committedFile);
 
       // Append the temp file (TODO: check schema)
       appendToFile(tempFile, committedFile);
 
-        // Override committed file name
-        committedFile = FileUtils.committedFileName(url, topicsDir, directory, tp,
-                                                    previousStartOffset, endOffset, extension,
-                                                    zeroPadOffsetFormat);
+      // Mark write as complete
+      storage.delete(tempFile);
 
-        // Rename previous to newCommitted
-        storage.commit(previousCommitFile, committedFile);
+      log.info("Committed (append-commit) {} for {}", committedFile, tp);
 
-        // Append the temp file (TODO: check schema)
-        appendToFile(tempFile, previousCommitFile);
-
-        // Mark write as complete
-        storage.delete(tempFile);
-
-        log.info("Committed (append-commit) {} for {}", committedFile, tp);
-      } else {
-        // No previous file, simple commit the temp file
-        simpleFileCommit(tempFile, committedFile);
-      }
-
-      previousCommitFiles.put(encodedPartiton, committedFile);
+      previousCommitFiles.put(encodedPartition, committedFile);
     }
 
-    startOffsets.remove(encodedPartiton);
+    startOffsets.remove(encodedPartition);
   }
 
   private void deleteTempFile(String encodedPartiton) throws IOException {
