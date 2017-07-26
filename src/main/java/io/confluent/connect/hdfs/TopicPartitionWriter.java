@@ -149,8 +149,10 @@ public class TopicPartitionWriter {
         connectorConfig.getString(HdfsSinkConnectorConfig.SCHEMA_COMPATIBILITY_CONFIG));
     appendOnCommit = connectorConfig.getBoolean(HdfsSinkConnectorConfig.APPEND_PARTITIONS_ON_COMMIT_CONFIG);
 
-    if (appendOnCommit && !writerProvider.supportAppends())
-      throw new ConnectException(String.format("%s is on, but a writerProvider (%s) that doesn't support appends, is being used", HdfsSinkConnectorConfig.APPEND_PARTITIONS_ON_COMMIT_CONFIG, writerProvider.getClass().getName()));
+    if (appendOnCommit && !writerProvider.supportAppends()) {
+      log.error(String.format("%s is on, but a writerProvider (%s) that doesn't support appends is being used, disabling.", HdfsSinkConnectorConfig.APPEND_PARTITIONS_ON_COMMIT_CONFIG, writerProvider.getClass().getName()));
+      appendOnCommit = false;
+    }
 
     String logsDir = connectorConfig.getString(HdfsSinkConnectorConfig.LOGS_DIR_CONFIG);
     wal = storage.wal(logsDir, tp);
