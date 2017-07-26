@@ -16,6 +16,7 @@
 
 package io.confluent.connect.hdfs.avro;
 
+import org.apache.avro.file.CodecFactory;
 import org.apache.avro.file.DataFileWriter;
 import org.apache.avro.file.SeekableInput;
 import org.apache.avro.generic.GenericDatumWriter;
@@ -51,6 +52,7 @@ public class AvroRecordWriterProvider implements RecordWriterProvider {
       throws IOException {
     DatumWriter<Object> datumWriter = new GenericDatumWriter<>();
     final DataFileWriter<Object> writer = new DataFileWriter<>(datumWriter);
+    writer.setCodec(CodecFactory.snappyCodec());
     Path path = new Path(fileName);
 
     final Schema schema = record.valueSchema();
