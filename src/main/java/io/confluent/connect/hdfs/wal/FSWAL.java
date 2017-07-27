@@ -43,6 +43,8 @@ public class FSWAL implements WAL {
   private Configuration conf = null;
   private Storage storage = null;
 
+  private boolean appendOnCommit = true;
+
   public FSWAL(String logsDir, TopicPartition topicPart, Storage storage)
       throws ConnectException {
     this.storage = storage;
@@ -77,6 +79,7 @@ public class FSWAL implements WAL {
         break;
       } catch (RemoteException e) {
         if (e.getClassName().equals(leaseException)) {
+          log.debug(e.toString());
           log.info("Cannot acquire lease on WAL {}", logFile);
           try {
             Thread.sleep(sleepIntervalMs);
@@ -118,7 +121,11 @@ public class FSWAL implements WAL {
             String tempFile = entry.getKey().getName();
             String committedFile = entry.getValue().getName();
             if (!storage.exists(committedFile)) {
-              storage.commit(tempFile, committedFile);
+              if (!appendOnCommit)
+                storage.commit(tempFile, committedFile);
+              else
+                // There is a possibility of partial writes, so delete the file, and reprocess offsets
+                storage.delete(committedFile);
             }
           }
         } else {

@@ -151,6 +151,15 @@ public class FileUtils {
     return fileStatusWithMaxOffset;
   }
 
+  public static long extractStartOffset(String filename) {
+    Matcher m = HdfsSinkConnectorConstants.COMMITTED_FILENAME_PATTERN.matcher(filename);
+    // NB: if statement has side effect of enabling group() call
+    if (!m.matches()) {
+      throw new IllegalArgumentException(filename + " does not match COMMITTED_FILENAME_PATTERN");
+    }
+    return Long.parseLong(m.group(HdfsSinkConnectorConstants.PATTERN_START_OFFSET_GROUP));
+  }
+
   public static long extractOffset(String filename) {
     Matcher m = HdfsSinkConnectorConstants.COMMITTED_FILENAME_PATTERN.matcher(filename);
     // NB: if statement has side effect of enabling group() call

@@ -79,6 +79,7 @@ public class DataWriter {
   private boolean hiveIntegration;
   private Thread ticketRenewThread;
   private volatile boolean isRunning;
+  private TempFileLimiter tempFileLimiter;
 
   public DataWriter(HdfsSinkConnectorConfig connectorConfig, SinkTaskContext context, AvroData avroData) {
     try {
@@ -190,9 +191,11 @@ public class DataWriter {
       }
 
       topicPartitionWriters = new HashMap<>();
+      this.tempFileLimiter = new TempFileLimiter(connectorConfig);
+
       for (TopicPartition tp: assignment) {
         TopicPartitionWriter topicPartitionWriter = new TopicPartitionWriter(
-            tp, storage, writerProvider, partitioner, connectorConfig, context, avroData, hiveMetaStore, hive, schemaFileReader, executorService,
+            tp, storage, writerProvider, partitioner, connectorConfig, context, avroData, tempFileLimiter, hiveMetaStore, hive, schemaFileReader, executorService,
             hiveUpdateFutures);
         topicPartitionWriters.put(tp, topicPartitionWriter);
       }
@@ -273,7 +276,7 @@ public class DataWriter {
     assignment = new HashSet<>(partitions);
     for (TopicPartition tp: assignment) {
       TopicPartitionWriter topicPartitionWriter = new TopicPartitionWriter(
-          tp, storage, writerProvider, partitioner, connectorConfig, context, avroData,
+          tp, storage, writerProvider, partitioner, connectorConfig, context, avroData, tempFileLimiter,
           hiveMetaStore, hive, schemaFileReader, executorService, hiveUpdateFutures);
       topicPartitionWriters.put(tp, topicPartitionWriter);
       // We need to immediately start recovery to ensure we pause consumption of messages for the

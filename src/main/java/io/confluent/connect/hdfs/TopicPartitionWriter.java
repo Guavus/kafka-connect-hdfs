@@ -14,11 +14,12 @@
 
 package io.confluent.connect.hdfs;
 
+import com.google.common.collect.Iterables;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.errors.IllegalWorkerStateException;
@@ -31,14 +32,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Queue;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
@@ -57,9 +51,10 @@ import io.confluent.connect.hdfs.wal.WAL;
 
 public class TopicPartitionWriter {
   private static final Logger log = LoggerFactory.getLogger(TopicPartitionWriter.class);
+
   private WAL wal;
   private Map<String, String> tempFiles;
-  private Map<String, RecordWriter<SinkRecord>> writers;
+  private LinkedHashMap<String, RecordWriter<SinkRecord>> writers;
   private TopicPartition tp;
   private Partitioner partitioner;
   private String url;
@@ -87,6 +82,7 @@ public class TopicPartitionWriter {
   private long failureTime;
   private Compatibility compatibility;
   private Schema currentSchema;
+  private Schema previousSchema;
   private HdfsSinkConnectorConfig connectorConfig;
   private String extension;
   private final String zeroPadOffsetFormat;
@@ -101,16 +97,10 @@ public class TopicPartitionWriter {
   private Queue<Future<Void>> hiveUpdateFutures;
   private Set<String> hivePartitions;
 
-  public TopicPartitionWriter(
-      TopicPartition tp,
-      Storage storage,
-      RecordWriterProvider writerProvider,
-      Partitioner partitioner,
-      HdfsSinkConnectorConfig connectorConfig,
-      SinkTaskContext context,
-      AvroData avroData) {
-    this(tp, storage, writerProvider, partitioner, connectorConfig, context, avroData, null, null, null, null, null);
-  }
+  private boolean appendOnCommit;
+  private TempFileLimiter tempFileLimiter;
+
+  private Map<String, String> previousCommitFiles;
 
   public TopicPartitionWriter(
       TopicPartition tp,
@@ -120,11 +110,24 @@ public class TopicPartitionWriter {
       HdfsSinkConnectorConfig connectorConfig,
       SinkTaskContext context,
       AvroData avroData,
-      HiveMetaStore hiveMetaStore,
-      HiveUtil hive,
-      SchemaFileReader schemaFileReader,
-      ExecutorService executorService,
-      Queue<Future<Void>> hiveUpdateFutures) {
+      TempFileLimiter tempFileLimiter) {
+    this(tp, storage, writerProvider, partitioner, connectorConfig, context, avroData, tempFileLimiter, null, null, null, null, null);
+  }
+
+  public TopicPartitionWriter(
+          TopicPartition tp,
+          Storage storage,
+          RecordWriterProvider writerProvider,
+          Partitioner partitioner,
+          HdfsSinkConnectorConfig connectorConfig,
+          SinkTaskContext context,
+          final AvroData avroData,
+          TempFileLimiter tempFileLimiter,
+          HiveMetaStore hiveMetaStore,
+          HiveUtil hive,
+          SchemaFileReader schemaFileReader,
+          ExecutorService executorService,
+          Queue<Future<Void>> hiveUpdateFutures) {
     this.tp = tp;
     this.connectorConfig = connectorConfig;
     this.context = context;
@@ -135,6 +138,7 @@ public class TopicPartitionWriter {
     this.url = storage.url();
     this.conf = storage.conf();
     this.schemaFileReader = schemaFileReader;
+    this.tempFileLimiter = tempFileLimiter;
 
     topicsDir = connectorConfig.getString(HdfsSinkConnectorConfig.TOPICS_DIR_CONFIG);
     flushSize = connectorConfig.getInt(HdfsSinkConnectorConfig.FLUSH_SIZE_CONFIG);
@@ -143,13 +147,22 @@ public class TopicPartitionWriter {
     timeoutMs = connectorConfig.getLong(HdfsSinkConnectorConfig.RETRY_BACKOFF_CONFIG);
     compatibility = SchemaUtils.getCompatibility(
         connectorConfig.getString(HdfsSinkConnectorConfig.SCHEMA_COMPATIBILITY_CONFIG));
+    appendOnCommit = connectorConfig.getBoolean(HdfsSinkConnectorConfig.APPEND_PARTITIONS_ON_COMMIT_CONFIG);
+
+    if (appendOnCommit && !writerProvider.supportAppends()) {
+      log.error(String.format("%s is on, but a writerProvider (%s) that doesn't support appends is being used, disabling.", HdfsSinkConnectorConfig.APPEND_PARTITIONS_ON_COMMIT_CONFIG, writerProvider.getClass().getName()));
+      appendOnCommit = false;
+    }
 
     String logsDir = connectorConfig.getString(HdfsSinkConnectorConfig.LOGS_DIR_CONFIG);
     wal = storage.wal(logsDir, tp);
 
     buffer = new LinkedList<>();
-    writers = new HashMap<>();
+
+    writers = new LinkedHashMap<>(100, 0.75f, true);
+
     tempFiles = new HashMap<>();
+    previousCommitFiles = new HashMap<>();
     appended = new HashSet<>();
     startOffsets = new HashMap<>();
     offsets = new HashMap<>();
@@ -249,9 +262,11 @@ public class TopicPartitionWriter {
   @SuppressWarnings("fallthrough")
   public void write() {
     long now = System.currentTimeMillis();
+
     if (failureTime > 0 && now - failureTime < timeoutMs) {
       return;
     }
+
     if (state.compareTo(State.WRITE_STARTED) < 0) {
       boolean success = recover();
       if (!success) {
@@ -259,6 +274,7 @@ public class TopicPartitionWriter {
       }
       updateRotationTimers();
     }
+
     while(!buffer.isEmpty()) {
       try {
         switch (state) {
@@ -327,10 +343,13 @@ public class TopicPartitionWriter {
         break;
       }
     }
+
     if (buffer.isEmpty()) {
-      // committing files after waiting for rotateIntervalMs time but less than flush.size records available
+      // committing files after waiting for rotateIntervalMs time but less than flush.size records tempFileCount
       if (recordCounter > 0 && shouldRotate(now)) {
-        log.info("committing files after waiting for rotateIntervalMs time but less than flush.size records available.");
+        log.info("committing files after waiting for rotateIntervalMs time but less than flush.size records tempFileCount.");
+        log.info("There is {} open temp files", tempFileLimiter.get());
+
         updateRotationTimers();
 
         try {
@@ -366,6 +385,7 @@ public class TopicPartitionWriter {
       }
     }
 
+    tempFileLimiter.removeMany(writers.size());
     writers.clear();
 
     try {
@@ -457,6 +477,7 @@ public class TopicPartitionWriter {
       String tempFile = getTempFile(encodedPartition);
       RecordWriter<SinkRecord> writer = writerProvider.getRecordWriter(conf, tempFile, record, avroData);
       writers.put(encodedPartition, writer);
+      tempFileLimiter.increment();
       if (hiveIntegration && !hivePartitions.contains(encodedPartition)) {
         addHivePartition(encodedPartition);
         hivePartitions.add(encodedPartition);
@@ -534,6 +555,17 @@ public class TopicPartitionWriter {
     RecordWriter<SinkRecord> writer = getWriter(record, encodedPartition);
     writer.write(record);
 
+    // Remove eldest entry if we busted the maximum
+    if (tempFileLimiter.isBusted()) {
+
+      if (writerProvider.supportAppends()) {
+        String key = Iterables.get(writers.keySet(), 0);
+        closeTempFile(key);
+      } else {
+        throw new ConnectException(String.format("The connector hit the maximum temp file limit %d, but the writerProvider doesn't support append (re-open). Can't continue.", tempFileLimiter.getMaxOpenTempFiles()));
+      }
+    }
+
     if (!startOffsets.containsKey(encodedPartition)) {
       startOffsets.put(encodedPartition, record.kafkaOffset());
       offsets.put(encodedPartition, record.kafkaOffset());
@@ -548,6 +580,7 @@ public class TopicPartitionWriter {
       RecordWriter<SinkRecord> writer = writers.get(encodedPartition);
       writer.close();
       writers.remove(encodedPartition);
+      tempFileLimiter.decrement();
     }
   }
 
@@ -565,12 +598,17 @@ public class TopicPartitionWriter {
     if (!startOffsets.containsKey(encodedPartition)) {
       return;
     }
-    long startOffset = startOffsets.get(encodedPartition);
-    long endOffset = offsets.get(encodedPartition);
-    String directory = getDirectory(encodedPartition);
-    String committedFile = FileUtils.committedFileName(url, topicsDir, directory, tp,
-                                                       startOffset, endOffset, extension,
-                                                       zeroPadOffsetFormat);
+
+    String committedFile;
+
+    if (!shouldAppend(encodedPartition)) {
+      committedFile = committedFileName(encodedPartition);
+    }
+    else {
+      String previousCommitFile = previousCommitFiles.get(encodedPartition);
+      committedFile = committedFileNameForAppend(previousCommitFile, encodedPartition);
+    }
+
     wal.append(tempFile, committedFile);
     appended.add(tempFile);
   }
@@ -597,32 +635,89 @@ public class TopicPartitionWriter {
 
   private void commitFile() throws IOException {
     appended.clear();
+
+    offset = offset + recordCounter;
+    recordCounter = 0;
+
     for (String encodedPartition: tempFiles.keySet()) {
       commitFile(encodedPartition);
     }
+
+    previousSchema = currentSchema;
   }
 
-  private void commitFile(String encodedPartiton) throws IOException {
-    if (!startOffsets.containsKey(encodedPartiton)) {
-      return;
-    }
+  private boolean shouldAppend(String encodedPartition) {
+    return appendOnCommit && previousCommitFiles.get(encodedPartition) != null && previousSchema.equals(currentSchema);
+  }
+
+  private String committedFileName(String encodedPartiton) {
     long startOffset = startOffsets.get(encodedPartiton);
     long endOffset = offsets.get(encodedPartiton);
-    String tempFile = tempFiles.get(encodedPartiton);
     String directory = getDirectory(encodedPartiton);
     String committedFile = FileUtils.committedFileName(url, topicsDir, directory, tp,
                                                        startOffset, endOffset, extension,
                                                        zeroPadOffsetFormat);
 
+    return committedFile;
+  }
+
+  private String committedFileNameForAppend(String previousCommitFile, String encodedPartiton) {
+
+    long previousStartOffset = FileUtils.extractStartOffset(new Path(previousCommitFile).getName());
+    long endOffset = offsets.get(encodedPartiton);
+    String directory = getDirectory(encodedPartiton);
+    String committedFile = FileUtils.committedFileName(url, topicsDir, directory, tp,
+                                                       previousStartOffset, endOffset, extension,
+                                                       zeroPadOffsetFormat);
+
+    return committedFile;
+  }
+
+  private void commitFile(String encodedPartition) throws IOException {
+    if (!startOffsets.containsKey(encodedPartition)) {
+      return;
+    }
+
+    String directory = getDirectory(encodedPartition);
+
+    String tempFile = tempFiles.get(encodedPartition);
+
     String directoryName = FileUtils.directoryName(url, topicsDir, directory);
     if (!storage.exists(directoryName)) {
       storage.mkdirs(directoryName);
     }
-    storage.commit(tempFile, committedFile);
-    startOffsets.remove(encodedPartiton);
-    offset = offset + recordCounter;
-    recordCounter = 0;
-    log.info("Committed {} for {}", committedFile, tp);
+
+    String committedFile;
+
+    if (!shouldAppend(encodedPartition)) {
+      // Simple commit
+
+      committedFile  = committedFileName(encodedPartition);
+      storage.commit(tempFile, committedFile);
+      log.info("Committed {} for {}", committedFile, tp);
+    } else {
+      // Append commit
+
+      String previousCommitFile = previousCommitFiles.get(encodedPartition);
+
+      // Override committed file name
+      committedFile = committedFileNameForAppend(previousCommitFile, encodedPartition);
+
+      // Rename previous to newCommitted
+      storage.commit(previousCommitFile, committedFile);
+
+      // Append the temp file (TODO: check schema)
+      writerProvider.appendToFile(tempFile, committedFile);
+
+      // Mark write as complete
+      storage.delete(tempFile);
+
+      log.info("Committed (append-commit) {} for {}", committedFile, tp);
+    }
+
+    previousCommitFiles.put(encodedPartition, committedFile);
+
+    startOffsets.remove(encodedPartition);
   }
 
   private void deleteTempFile(String encodedPartiton) throws IOException {
