@@ -202,7 +202,7 @@ public class HdfsSinkTaskTest extends TestWithMiniDFSCluster {
     Storage storage = StorageFactory.createStorage(storageClass, conf, url);
 
     for (TopicPartition tp: tempfiles.keySet()) {
-      WAL wal = storage.wal(logsDir, tp);
+      WAL wal = storage.wal(logsDir, tp, false);
       List<String> tempList = tempfiles.get(tp);
       List<String> committedList = committedFiles.get(tp);
       wal.append(WAL.beginMarker, "");

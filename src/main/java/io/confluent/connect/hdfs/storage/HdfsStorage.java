@@ -85,8 +85,8 @@ public class HdfsStorage implements Storage {
   }
 
   @Override
-  public WAL wal(String topicsDir, TopicPartition topicPart) {
-    return new FSWAL(topicsDir, topicPart, this);
+  public WAL wal(String topicsDir, TopicPartition topicPart, Boolean appendOnCommit) {
+    return new FSWAL(topicsDir, topicPart, this, appendOnCommit);
   }
 
   @Override

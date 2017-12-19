@@ -32,7 +32,7 @@ public interface Storage {
   void delete(String filename) throws IOException;
   void commit(String tempFile, String committedFile) throws IOException;
   void close() throws IOException;
-  WAL wal(String topicsDir, TopicPartition topicPart);
+  WAL wal(String topicsDir, TopicPartition topicPart, Boolean appendOnCommit);
   FileStatus[] listStatus(String path, PathFilter filter) throws IOException;
   FileStatus[] listStatus(String path) throws IOException;
   String url();

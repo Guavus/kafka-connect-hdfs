@@ -155,7 +155,7 @@ public class TopicPartitionWriter {
     }
 
     String logsDir = connectorConfig.getString(HdfsSinkConnectorConfig.LOGS_DIR_CONFIG);
-    wal = storage.wal(logsDir, tp);
+    wal = storage.wal(logsDir, tp, appendOnCommit);
 
     buffer = new LinkedList<>();
 

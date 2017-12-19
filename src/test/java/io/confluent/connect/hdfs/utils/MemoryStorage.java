@@ -147,7 +147,7 @@ public class MemoryStorage implements Storage {
   }
 
   @Override
-  public WAL wal(String topicsDir, TopicPartition topicPart) {
+  public WAL wal(String topicsDir, TopicPartition topicPart, Boolean appendOnCommit) {
     return new MemoryWAL(topicsDir, topicPart, this);
   }
 

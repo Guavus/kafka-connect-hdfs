@@ -14,7 +14,9 @@
 
 package io.confluent.connect.hdfs.wal;
 
+import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.junit.Test;
 
@@ -42,8 +44,8 @@ public class WALTest extends TestWithMiniDFSCluster {
         Class.forName(connectorConfig.getString(HdfsSinkConnectorConfig.STORAGE_CLASS_CONFIG));
     Storage storage = StorageFactory.createStorage(storageClass, conf, url);
 
-    final WAL wal1 = storage.wal(topicsDir, TOPIC_PARTITION);
-    final WAL wal2 = storage.wal(topicsDir, TOPIC_PARTITION);
+    final WAL wal1 = storage.wal(topicsDir, TOPIC_PARTITION, false);
+    final WAL wal2 = storage.wal(topicsDir, TOPIC_PARTITION, false);
 
     String directory = TOPIC + "/" + String.valueOf(PARTITION);
     final String tempfile = FileUtils.tempFileName(url, topicsDir, directory, extension);

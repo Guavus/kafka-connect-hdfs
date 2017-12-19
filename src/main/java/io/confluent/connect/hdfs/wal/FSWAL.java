@@ -43,10 +43,11 @@ public class FSWAL implements WAL {
   private Configuration conf = null;
   private Storage storage = null;
 
-  private boolean appendOnCommit = true;
+  private boolean appendOnCommit = false;
 
-  public FSWAL(String logsDir, TopicPartition topicPart, Storage storage)
+  public FSWAL(String logsDir, TopicPartition topicPart, Storage storage, Boolean appendOnCommit)
       throws ConnectException {
+    this.appendOnCommit = appendOnCommit;
     this.storage = storage;
     this.conf = storage.conf();
     String url = storage.url();
