@@ -40,6 +40,7 @@ import org.apache.hadoop.util.Time;
 import java.io.Closeable;
 import java.io.DataInputStream;
 import java.io.IOException;
+import org.apache.hadoop.ipc.RemoteException;
 import java.rmi.server.UID;
 import java.security.MessageDigest;
 import java.util.Arrays;
@@ -194,40 +195,50 @@ public class WALFile {
                                            "compatible with stream");
       }
 
+      FileSystem fs = null;
       FSDataOutputStream out;
       boolean ownStream = fileOption != null;
-      if (ownStream) {
-        Path p = fileOption.getValue();
-        FileSystem fs;
-        fs = p.getFileSystem(conf);
-        int bufferSize = bufferSizeOption == null ? getBufferSize(conf) :
-                         bufferSizeOption.getValue();
-        short replication = replicationOption == null ?
-                            fs.getDefaultReplication(p) :
-                            (short) replicationOption.getValue();
-        long blockSize = blockSizeOption == null ? fs.getDefaultBlockSize(p) :
-                         blockSizeOption.getValue();
+      try {
+        if (ownStream) {
+          Path p = fileOption.getValue();
+          fs = p.getFileSystem(conf);
+          int bufferSize = bufferSizeOption == null ? getBufferSize(conf) :
+                           bufferSizeOption.getValue();
+          short replication = replicationOption == null ?
+                              fs.getDefaultReplication(p) :
+                              (short) replicationOption.getValue();
+          long blockSize = blockSizeOption == null ? fs.getDefaultBlockSize(p) :
+                           blockSizeOption.getValue();
 
-        if (appendIfExistsOption != null && appendIfExistsOption.getValue()
-            && fs.exists(p)) {
-          // Read the file and verify header details
-          try (WALFile.Reader reader =
-                   new WALFile.Reader(conf, WALFile.Reader.file(p), new Reader.OnlyHeaderOption())){
-            if (reader.getVersion() != VERSION[3]) {
-              throw new VersionMismatchException(VERSION[3], reader.getVersion());
+          if (appendIfExistsOption != null && appendIfExistsOption.getValue() && fs.exists(p)) {
+            // Read the file and verify header details
+            try (WALFile.Reader reader =
+                     new WALFile.Reader(conf, WALFile.Reader.file(p), new Reader.OnlyHeaderOption())){
+              if (reader.getVersion() != VERSION[3]) {
+                throw new VersionMismatchException(VERSION[3], reader.getVersion());
+              }
+              sync = reader.getSync();
             }
-            sync = reader.getSync();
+            out = fs.append(p, bufferSize);
+            this.appendMode = true;
+          } else {
+            out = fs.create(p, true, bufferSize, replication, blockSize);
           }
-          out = fs.append(p, bufferSize);
-          this.appendMode = true;
         } else {
-          out = fs.create(p, true, bufferSize, replication, blockSize);
+          out = streamOption.getValue();
         }
-      } else {
-        out = streamOption.getValue();
-      }
 
-      init(conf, out, ownStream);
+        init(conf, out, ownStream);
+      }
+      catch (RemoteException re) {
+        log.error("Failed creating a WAL Writer: " + re.getMessage());
+        if (re.getClassName().equals(WALConstants.LEASE_EXCEPTION_CLASS_NAME)) {
+          if (fs != null) {
+            fs.close();
+          }
+        }
+        throw re;
+      }
     }
 
     void init(Configuration conf, FSDataOutputStream out, boolean ownStream)
@@ -512,21 +523,32 @@ public class WALFile {
       Path filename = null;
       FSDataInputStream file;
       final long len;
-      if (fileOpt != null) {
-        filename = fileOpt.getValue();
-        FileSystem fs = filename.getFileSystem(conf);
-        int bufSize = bufOpt == null ? getBufferSize(conf) : bufOpt.getValue();
-        len = null == lenOpt
-              ? fs.getFileStatus(filename).getLen()
-              : lenOpt.getValue();
-        file = openFile(fs, filename, bufSize, len);
-      } else {
-        len = null == lenOpt ? Long.MAX_VALUE : lenOpt.getValue();
-        file = streamOpt.getValue();
+      FileSystem fs = null;
+      try {
+        if (fileOpt != null) {
+          filename = fileOpt.getValue();
+          fs = filename.getFileSystem(conf);
+          int bufSize = bufOpt == null ? getBufferSize(conf) : bufOpt.getValue();
+          len = null == lenOpt
+                ? fs.getFileStatus(filename).getLen()
+                : lenOpt.getValue();
+          file = openFile(fs, filename, bufSize, len);
+        } else {
+          len = null == lenOpt ? Long.MAX_VALUE : lenOpt.getValue();
+          file = streamOpt.getValue();
+        }
+        long start = startOpt == null ? 0 : startOpt.getValue();
+        // really set up
+        initialize(filename, file, start, len, conf, headerOnly != null);
+      } catch (RemoteException re) {
+        log.error("Failed creating a WAL Reader: " + re.getMessage());
+        if (re.getClassName().equals(WALConstants.LEASE_EXCEPTION_CLASS_NAME)) {
+          if (fs != null) {
+            fs.close();
+          }
+        }
+        throw re;
       }
-      long start = startOpt == null ? 0 : startOpt.getValue();
-      // really set up
-      initialize(filename, file, start, len, conf, headerOnly != null);
     }
 
     /**
