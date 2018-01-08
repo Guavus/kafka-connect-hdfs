@@ -74,10 +74,21 @@ public class FileUtils {
     return fileName(url, topicsDir, directory, name);
   }
 
-  public static String committedFileName(
+  public static String committedFileNameWithPath(
       String url,
       String topicsDir,
       String directory,
+      TopicPartition topicPart,
+      long startOffset,
+      long endOffset,
+      String extension,
+      String zeroPadFormat
+  ) {
+    String name = committedFileName(topicPart, startOffset, endOffset, extension, zeroPadFormat);
+    return fileName(url, topicsDir, directory, name);
+  }
+
+  public static String committedFileName(
       TopicPartition topicPart,
       long startOffset,
       long endOffset,
@@ -96,47 +107,60 @@ public class FileUtils {
     sb.append(String.format(zeroPadFormat, endOffset));
     sb.append(extension);
     String name = sb.toString();
-    return fileName(url, topicsDir, directory, name);
+    return name;
+  }
+
+  public static String appendingFileName(String commitedFileName) {
+    return commitedFileName + "._APPENDING_";
   }
 
   public static String topicDirectory(String url, String topicsDir, String topic) {
     return url + "/" + topicsDir + "/" + topic;
   }
 
+  // TODO: Double check
   public static FileStatus fileStatusWithMaxOffset(
       Storage storage,
       Path path,
-      CommittedFileFilter filter
+      CommittedFileFilter filter,
+      Boolean checkIfExists
   ) {
-    if (!storage.exists(path.toString())) {
+    if (checkIfExists && !storage.exists(path.toString())) {
       return null;
     }
     long maxOffset = -1L;
     FileStatus fileStatusWithMaxOffset = null;
     List<FileStatus> statuses = storage.list(path.toString());
     for (FileStatus status : statuses) {
+      FileStatus currentStatus = null;
+
       if (status.isDirectory()) {
-        FileStatus fileStatus = fileStatusWithMaxOffset(storage, status.getPath(), filter);
-        if (fileStatus != null) {
-          long offset = extractOffset(fileStatus.getPath().getName());
-          if (offset > maxOffset) {
-            maxOffset = offset;
-            fileStatusWithMaxOffset = fileStatus;
-          }
-        }
-      } else {
-        String filename = status.getPath().getName();
-        log.trace("Checked for max offset: {}", status.getPath());
-        if (filter.accept(status.getPath())) {
-          long offset = extractOffset(filename);
-          if (offset > maxOffset) {
-            maxOffset = offset;
-            fileStatusWithMaxOffset = status;
-          }
+        currentStatus = fileStatusWithMaxOffset(storage, status.getPath(), filter, false);
+      } else if (filter.accept(status.getPath())) {
+        currentStatus = status;
+      }
+
+      if (currentStatus != null) {
+        log.trace("Checked for max offset: {}", currentStatus.getPath());
+
+        long offset = extractOffset(currentStatus.getPath().getName());
+
+        if (offset > maxOffset) {
+          maxOffset = offset;
+          fileStatusWithMaxOffset = currentStatus;
         }
       }
     }
     return fileStatusWithMaxOffset;
+  }
+
+  public static long extractStartOffset(String filename) {
+    Matcher m = HdfsSinkConnectorConstants.COMMITTED_FILENAME_PATTERN.matcher(filename);
+    // NB: if statement has side effect of enabling group() call
+    if (!m.matches()) {
+      throw new IllegalArgumentException(filename + " does not match COMMITTED_FILENAME_PATTERN");
+    }
+    return Long.parseLong(m.group(HdfsSinkConnectorConstants.PATTERN_START_OFFSET_GROUP));
   }
 
   public static long extractOffset(String filename) {

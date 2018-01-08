@@ -14,6 +14,9 @@
 
 package io.confluent.connect.hdfs;
 
+import io.confluent.connect.hdfs.avro.AvroFileAppender;
+import io.confluent.connect.hdfs.avro.AvroRecordWriterProvider;
+import io.confluent.connect.hdfs.parquet.ParquetRecordWriterProvider;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.kafka.common.TopicPartition;
@@ -63,6 +66,8 @@ public class TopicPartitionWriter {
   private static final Logger log = LoggerFactory.getLogger(TopicPartitionWriter.class);
   private static final TimestampExtractor WALLCLOCK =
       new TimeBasedPartitioner.WallclockTimestampExtractor();
+
+
   private final io.confluent.connect.storage.format.RecordWriterProvider<HdfsSinkConnectorConfig>
       newWriterProvider;
   private final String zeroPadOffsetFormat;
@@ -114,6 +119,8 @@ public class TopicPartitionWriter {
   private final ExecutorService executorService;
   private final Queue<Future<Void>> hiveUpdateFutures;
   private final Set<String> hivePartitions;
+  private final boolean shouldAppendCommit;
+  private final long appendOnCommitBypassThreshold;
 
   public TopicPartitionWriter(
       TopicPartition tp,
@@ -197,7 +204,8 @@ public class TopicPartitionWriter {
         connectorConfig.getString(HiveConfig.SCHEMA_COMPATIBILITY_CONFIG));
 
     String logsDir = connectorConfig.getString(HdfsSinkConnectorConfig.LOGS_DIR_CONFIG);
-    wal = storage.wal(logsDir, tp);
+
+    wal = storage.wal(logsDir, tp, this::commitFileWAL);
 
     buffer = new LinkedList<>();
     writers = new HashMap<>();
@@ -239,6 +247,11 @@ public class TopicPartitionWriter {
     } else {
       timeZone = null;
     }
+
+    this.shouldAppendCommit =
+      connectorConfig.getBoolean(HdfsSinkConnectorConfig.APPEND_ON_COMMIT_CONFIG);
+    this.appendOnCommitBypassThreshold =
+      connectorConfig.getLong(HdfsSinkConnectorConfig.APPEND_ON_COMMIT_BYPASS_THRESHOLD_CONFIG);
 
     // Initialize rotation timers
     updateRotationTimers(null);
@@ -338,7 +351,8 @@ public class TopicPartitionWriter {
                 FileStatus fileStatusWithMaxOffset = FileUtils.fileStatusWithMaxOffset(
                     storage,
                     new Path(topicDir),
-                    filter
+                    filter,
+                    true
                 );
                 if (fileStatusWithMaxOffset != null) {
                   currentSchema = schemaFileReader.getSchema(
@@ -477,11 +491,27 @@ public class TopicPartitionWriter {
   }
 
   public void buffer(SinkRecord sinkRecord) {
+    if (offset == -1) {
+      offset = sinkRecord.kafkaOffset();
+    }
+
     buffer.add(sinkRecord);
+  }
+
+  public int bufferedRecordCount() {
+    return buffer.size();
+  }
+
+  public void clear() {
+    buffer.clear();
   }
 
   public long offset() {
     return offset;
+  }
+
+  public long uncommittedOffset() {
+    return offset + recordCounter;
   }
 
   Map<String, io.confluent.connect.storage.format.RecordWriter> getWriters() {
@@ -494,6 +524,10 @@ public class TopicPartitionWriter {
 
   private String getDirectory(String encodedPartition) {
     return partitioner.generatePartitionedPath(tp.topic(), encodedPartition);
+  }
+
+  private String getParentPath(String filename) {
+    return new Path(filename).getParent().toString();
   }
 
   private void nextState() {
@@ -529,7 +563,8 @@ public class TopicPartitionWriter {
     FileStatus fileStatusWithMaxOffset = FileUtils.fileStatusWithMaxOffset(
         storage,
         new Path(path),
-        filter
+        filter,
+        true
     );
     if (fileStatusWithMaxOffset != null) {
       offset = FileUtils.extractOffset(fileStatusWithMaxOffset.getPath().getName()) + 1;
@@ -666,7 +701,7 @@ public class TopicPartitionWriter {
     long startOffset = startOffsets.get(encodedPartition);
     long endOffset = offsets.get(encodedPartition);
     String directory = getDirectory(encodedPartition);
-    String committedFile = FileUtils.committedFileName(
+    String committedFile = FileUtils.committedFileNameWithPath(
         url,
         topicsDir,
         directory,
@@ -705,17 +740,59 @@ public class TopicPartitionWriter {
     for (String encodedPartition : tempFiles.keySet()) {
       commitFile(encodedPartition);
     }
+
+    // Clear the content of the map to get the tempFiles count accurate
+    tempFiles.clear();
   }
 
   private void commitFile(String encodedPartition) {
+    if (shouldAppendCommit && formatSupportAppendCommit()) {
+      FileStatus previousCommittedFile = getPreviousCommittedFileFromPartition(encodedPartition);
+
+      boolean smallEnough =
+              previousCommittedFile != null
+                      && previousCommittedFile.getLen() <= appendOnCommitBypassThreshold;
+
+      if (smallEnough) {
+        appendCommitFile(previousCommittedFile, encodedPartition);
+      } else {
+        newFileCommit(encodedPartition);
+      }
+    } else {
+      newFileCommit(encodedPartition);
+    }
+  }
+
+  private void commitFileWAL(String tempFile, String committedFile) {
+    if (shouldAppendCommit && formatSupportAppendCommit()) {
+
+      String path = getParentPath(committedFile);
+      FileStatus previousCommittedFile = getPreviousCommittedFileFromDirectory(path);
+
+      boolean smallEnough =
+              previousCommittedFile != null
+                      && previousCommittedFile.getLen() <= appendOnCommitBypassThreshold;
+
+      if (smallEnough) {
+        appendCommitFileWAL(previousCommittedFile, tempFile, committedFile);
+      } else {
+        newFileCommitWAL(tempFile, committedFile);
+      }
+    } else {
+      newFileCommitWAL(tempFile, committedFile);
+    }
+  }
+
+  private void newFileCommit(String encodedPartition) {
     if (!startOffsets.containsKey(encodedPartition)) {
       return;
     }
-    long startOffset = startOffsets.get(encodedPartition);
-    long endOffset = offsets.get(encodedPartition);
-    String tempFile = tempFiles.get(encodedPartition);
-    String directory = getDirectory(encodedPartition);
-    String committedFile = FileUtils.committedFileName(
+
+    final long startOffset = startOffsets.get(encodedPartition);
+    final long endOffset = offsets.get(encodedPartition);
+    final String tempFile = tempFiles.get(encodedPartition);
+    final String directory = getDirectory(encodedPartition);
+    final String committedFile = FileUtils.committedFileNameWithPath(
         url,
         topicsDir,
         directory,
@@ -726,16 +803,154 @@ public class TopicPartitionWriter {
         zeroPadOffsetFormat
     );
 
-    String directoryName = FileUtils.directoryName(url, topicsDir, directory);
+    final String directoryName = FileUtils.directoryName(url, topicsDir, directory);
     if (!storage.exists(directoryName)) {
       storage.create(directoryName);
     }
     storage.commit(tempFile, committedFile);
+
+    resetCounterAndOffsetsForPartition(encodedPartition);
+
+    log.info("Committed {} for {}", committedFile, tp);
+  }
+
+  private void newFileCommitWAL(String tempFile, String committedFile) {
+    final String directoryName = getParentPath(committedFile);
+
+    if (!storage.exists(directoryName)) {
+      storage.create(directoryName);
+    }
+    storage.commit(tempFile, committedFile);
+
+    log.info("Committed (WAL replay) {} for {}", committedFile, tp);
+  }
+
+  private void appendCommitFile(FileStatus previousCommittedFile, String encodedPartition) {
+    if (!startOffsets.containsKey(encodedPartition)) {
+      return;
+    }
+
+    final String previousCommittedFilename = previousCommittedFile.getPath().getName();
+    final long previousStartOffset = FileUtils.extractStartOffset(previousCommittedFilename);
+    final long endOffset = offsets.get(encodedPartition);
+
+    final String tempFile = tempFiles.get(encodedPartition);
+    final String directory = getDirectory(encodedPartition);
+
+    final String committedFile = FileUtils.committedFileNameWithPath(
+        url,
+        topicsDir,
+        directory,
+        tp,
+        previousStartOffset,
+        endOffset,
+        extension,
+        zeroPadOffsetFormat
+    );
+
+    final String temporaryCommittedFile = FileUtils.appendingFileName(tempFile);
+
+    // Append the tempFile and the previousFile into a new file
+    try {
+      getFileAppender()
+        .append(previousCommittedFile.getPath().toString(), tempFile, temporaryCommittedFile);
+    } catch (IOException e) {
+      throw new ConnectException(e);
+    }
+
+    // Delete the temporary file and the old committed file
+    storage.delete(tempFile);
+    storage.delete(previousCommittedFile.getPath().toString());
+
+    // Make the temporaryCommittedFile available
+    storage.commit(temporaryCommittedFile, committedFile);
+
+    resetCounterAndOffsetsForPartition(encodedPartition);
+
+    log.info("Committed (append-commit) {} for {}", committedFile, tp);
+  }
+
+  private void appendCommitFileWAL(
+      FileStatus previousCommittedFile,
+      String tempFile,
+      String committedFileWAL) {
+
+    final String previousCommittedFilename = previousCommittedFile.getPath().getName();
+    final String committedFileNameWAL = new Path(committedFileWAL).getName();
+
+    final long previousStartOffset = FileUtils.extractStartOffset(previousCommittedFilename);
+    final long endOffset = FileUtils.extractOffset(new Path(committedFileNameWAL).getName());
+
+    String partitionFullPath = new Path(committedFileWAL).getParent().toString();
+
+    String committedFileName = FileUtils.committedFileName(
+        tp,
+        previousStartOffset,
+        endOffset,
+        extension,
+        zeroPadOffsetFormat
+    );
+
+    final String committedFile = partitionFullPath + "/" + new Path(committedFileName).getName();
+
+    final String temporaryCommittedFile = FileUtils.appendingFileName(tempFile);
+
+    if (storage.exists(tempFile)) {
+      // Append the tempFile and the previousFile into a new file
+      try {
+        getFileAppender()
+          .append(previousCommittedFile.getPath().toString(), tempFile, temporaryCommittedFile);
+      } catch (IOException e) {
+        throw new ConnectException(e);
+      }
+    }
+
+    // Delete the temporary file and the old committed file
+    storage.delete(tempFile);
+
+    if (storage.exists(temporaryCommittedFile)) {
+      storage.delete(previousCommittedFile.getPath().toString());
+
+      // Make the temporaryCommittedFile available
+      storage.commit(temporaryCommittedFile, committedFile);
+    }
+
+    log.info("Committed (append-commit and WAL-Replay) {} for {}", committedFile, tp);
+  }
+
+  public FileStatus getPreviousCommittedFileFromPartition(String encodedPartition) {
+    String partitionDirectory = getDirectory(encodedPartition);
+    String path = url + "/" + topicsDir + "/" + partitionDirectory;
+    CommittedFileFilter filter = new TopicPartitionCommittedFileFilter(tp);
+    return FileUtils.fileStatusWithMaxOffset(storage, new Path(path), filter, true);
+  }
+
+  public FileStatus getPreviousCommittedFileFromDirectory(String directory) {
+    CommittedFileFilter filter = new TopicPartitionCommittedFileFilter(tp);
+    return FileUtils.fileStatusWithMaxOffset(storage, new Path(directory), filter, true);
+  }
+
+  // TODO: Move to io.confluent.connect.storage.format.Format
+  private FileMerger getFileAppender() {
+    if (newWriterProvider instanceof AvroRecordWriterProvider) {
+      return new AvroFileAppender(storage.conf().getHadoopConfiguration(), storage);
+    } else if (newWriterProvider instanceof ParquetRecordWriterProvider) {
+      // Will be supported in the future once we migrate to Parquet 1.9 +
+      return null;
+    } else {
+      return null;
+    }
+  }
+
+  private boolean formatSupportAppendCommit() {
+    return getFileAppender() != null;
+  }
+
+  private void resetCounterAndOffsetsForPartition(String encodedPartition) {
     startOffsets.remove(encodedPartition);
     offsets.remove(encodedPartition);
     offset = offset + recordCounter;
     recordCounter = 0;
-    log.info("Committed {} for {}", committedFile, tp);
   }
 
   private void deleteTempFile(String encodedPartition) {

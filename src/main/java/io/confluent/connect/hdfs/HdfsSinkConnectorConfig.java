@@ -112,6 +112,33 @@ public class HdfsSinkConnectorConfig extends StorageSinkConnectorConfig {
   private static final String KERBEROS_TICKET_RENEW_PERIOD_MS_DISPLAY = "Kerberos Ticket Renew "
       + "Period (ms)";
 
+  public static final String APPEND_ON_COMMIT_CONFIG = "append.on.commit";
+  private static final String APPEND_ON_COMMIT_DOC =
+      "Instead of creating a new file on HDFS every time the connector flush,"
+         + "append (if possible) to the older file for the same partitions instead."
+            + "NOTE: This will rename the older files to replace them with the newer ones."
+               + "If you query this path during a commit you might be get a FileNotFound error.";
+  public static final boolean APPEND_ON_COMMIT_DEFAULT = false;
+  private static final String APPEND_ON_COMMIT_DISPLAY = "Merge contiguous files";
+  
+  public static final String APPEND_ON_COMMIT_BYPASS_THRESHOLD_CONFIG =
+          "append.on.commit.bypass.threshold";
+  private static final String APPEND_ON_COMMIT_BYPASS_THRESHOLD_DOC =
+      "The connector will not attempt to append commit to a previous file "
+          + "if that is bigger than this threshold.";
+  public static final long APPEND_ON_COMMIT_BYPASS_THRESHOLD_DEFAULT = 32L * 1024L * 1024L; // 32MB;
+  private static final String APPEND_ON_COMMIT_BYPASS_THRESHOLD_DISPLAY =
+      "The maximum filesize for append commit.";
+
+  public static final String TARGET_TEMP_FILES_CONFIG = "target.tmp.files";
+  private static final String TARGET_TEMP_FILES_DOC =
+      "Try to limit the number of temporary files the connector use at once. "
+          + "This is a best-effort, there is some rules to follow that could prevent the "
+             + "exact limit to be reached but it will try to converge to this number.";
+
+  public static final int TARGET_TEMP_FILES_DEFAULT = 256;
+  private static final String TARGET_TEMP_FILES_DISPLAY = "Target maximum temporary files count";
+
   private static final ConfigDef.Recommender hdfsAuthenticationKerberosDependentsRecommender =
       new BooleanParentRecommender(
           HDFS_AUTHENTICATION_KERBEROS_CONFIG);
@@ -196,6 +223,42 @@ public class HdfsSinkConnectorConfig extends StorageSinkConnectorConfig {
           Width.SHORT,
           LOGS_DIR_DISPLAY
       );
+
+      configDef.define(
+          APPEND_ON_COMMIT_CONFIG,
+          Type.BOOLEAN,
+          APPEND_ON_COMMIT_DEFAULT,
+          Importance.LOW,
+          APPEND_ON_COMMIT_DOC,
+          group,
+          ++orderInGroup,
+          Width.SHORT,
+          APPEND_ON_COMMIT_DISPLAY
+      );
+
+      configDef.define(
+          APPEND_ON_COMMIT_BYPASS_THRESHOLD_CONFIG,
+          Type.LONG,
+          APPEND_ON_COMMIT_BYPASS_THRESHOLD_DEFAULT,
+          Importance.LOW,
+          APPEND_ON_COMMIT_BYPASS_THRESHOLD_DOC,
+          group,
+          ++orderInGroup,
+          Width.LONG,
+          APPEND_ON_COMMIT_BYPASS_THRESHOLD_DISPLAY
+      );
+
+      configDef.define(
+          TARGET_TEMP_FILES_CONFIG,
+          Type.INT,
+              TARGET_TEMP_FILES_DEFAULT,
+          ConfigDef.Range.atLeast(0),
+          Importance.LOW,
+          TARGET_TEMP_FILES_DOC,
+            group,
+          ++orderInGroup,
+          Width.MEDIUM,
+              TARGET_TEMP_FILES_DISPLAY);
     }
 
     {

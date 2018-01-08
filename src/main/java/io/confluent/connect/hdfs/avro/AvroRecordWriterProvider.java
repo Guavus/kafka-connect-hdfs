@@ -14,6 +14,7 @@
 
 package io.confluent.connect.hdfs.avro;
 
+import org.apache.avro.file.CodecFactory;
 import org.apache.avro.file.DataFileWriter;
 import org.apache.avro.generic.GenericDatumWriter;
 import org.apache.hadoop.fs.FSDataOutputStream;
@@ -55,6 +56,10 @@ public class AvroRecordWriterProvider
       final DataFileWriter<Object> writer = new DataFileWriter<>(new GenericDatumWriter<>());
       final Path path = new Path(filename);
       Schema schema = null;
+
+      {
+        writer.setCodec(CodecFactory.snappyCodec());
+      }
 
       @Override
       public void write(SinkRecord record) {

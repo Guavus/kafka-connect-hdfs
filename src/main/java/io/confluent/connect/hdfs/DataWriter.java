@@ -14,6 +14,9 @@
 
 package io.confluent.connect.hdfs;
 
+import com.google.common.cache.CacheBuilder;
+import com.google.common.cache.CacheLoader;
+import com.google.common.cache.LoadingCache;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
@@ -41,11 +44,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
+import java.util.Collections;
+import java.util.ArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import io.confluent.common.utils.SystemTime;
 import io.confluent.common.utils.Time;
@@ -92,6 +98,10 @@ public class DataWriter {
   private boolean hiveIntegration;
   private Thread ticketRenewThread;
   private volatile boolean isRunning;
+  private int maxTempFiles;
+  private LoadingCache<TopicPartition, Boolean> bustedTopicPartitionsCache;
+
+  private static final int MAX_ALLOWED_OVERRIDE = 3;
 
   public DataWriter(
       HdfsSinkConnectorConfig connectorConfig,
@@ -341,16 +351,24 @@ public class DataWriter {
     } catch (IOException e) {
       throw new ConnectException(e);
     }
+
+    maxTempFiles = connectorConfig.getInt(HdfsSinkConnectorConfig.TARGET_TEMP_FILES_CONFIG);
+
+    bustedTopicPartitionsCache = CacheBuilder.newBuilder()
+      .concurrencyLevel(1)
+      .weakKeys()
+      .maximumSize(10000)
+      .expireAfterWrite(1, TimeUnit.MINUTES)
+      .build(new CacheLoader<TopicPartition, Boolean>() {
+        @Override
+        public Boolean load(TopicPartition key) throws Exception {
+          // Default to false
+          return false;
+        }
+      });
   }
 
-  public void write(Collection<SinkRecord> records) {
-    for (SinkRecord record : records) {
-      String topic = record.topic();
-      int partition = record.kafkaPartition();
-      TopicPartition tp = new TopicPartition(topic, partition);
-      topicPartitionWriters.get(tp).buffer(record);
-    }
-
+  private void processHiveFutures() {
     if (hiveIntegration) {
       Iterator<Future<Void>> iterator = hiveUpdateFutures.iterator();
       while (iterator.hasNext()) {
@@ -369,8 +387,86 @@ public class DataWriter {
         }
       }
     }
+  }
 
-    for (TopicPartition tp : assignment) {
+  private List<TopicPartition> getShuffledAssigments() {
+    List<TopicPartition> list = new ArrayList<>(assignment);
+    Collections.shuffle(list);
+    return list;
+  }
+
+  private int getTotalTempFiles() {
+    return
+      topicPartitionWriters
+        .values()
+        .stream()
+        .mapToInt(tp -> tp.getTempFiles().size()).sum();
+  }
+
+  // TODO: Test
+  private List<TopicPartition> getTopNTopicPartitionsSortByTempFiles(int n) {
+    return
+      topicPartitionWriters
+        .entrySet()
+        .stream()
+        .sorted((e1, e2) ->
+          // Sort in reverse order of temp files
+          Integer.compare(
+            e2.getValue().getTempFiles().size(),
+            e1.getValue().getTempFiles().size()
+          )
+        )
+        .map(Map.Entry::getKey)
+        .limit(n)
+        .collect(Collectors.toList());
+  }
+
+  public void write(Collection<SinkRecord> records) {
+
+    log.debug("Received {} records to process", records.size());
+
+    for (SinkRecord record : records) {
+      String topic = record.topic();
+      int partition = record.kafkaPartition();
+      TopicPartition tp = new TopicPartition(topic, partition);
+      topicPartitionWriters.get(tp).buffer(record);
+    }
+
+    // TODO: Why here?
+    processHiveFutures();
+
+    List<TopicPartition> shuffledAssigments = getShuffledAssigments();
+
+    for (TopicPartition tp : shuffledAssigments) {
+
+      int totalTempFiles = getTotalTempFiles();
+      int averageTempFiles = (int)Math.ceil(totalTempFiles / (double)topicPartitionWriters.size());
+      int expectedTempFiles = totalTempFiles + averageTempFiles;
+
+      // Check if the next write is likely to bust the maxTempFiles limit,
+      // if so clear buffer, and only write to force possible rotate.
+      boolean willBust = topicPartitionWriters.get(tp).bufferedRecordCount() > 0
+                            && expectedTempFiles > maxTempFiles;
+
+      List<TopicPartition> topTopics = getTopNTopicPartitionsSortByTempFiles(MAX_ALLOWED_OVERRIDE);
+      boolean allowedToBust = topTopics.contains(tp);
+
+      if (willBust && !allowedToBust) {
+
+        if (!bustedTopicPartitionsCache.getUnchecked(tp)) {
+          String message = "Not attempting to write records for topic-partition {} "
+                           + "to avoid creating to many temporary files ({}/{}). "
+                           + "This warning will be silenced for 60s.";
+
+          log.warn(message, tp.toString(), expectedTempFiles, maxTempFiles);
+          bustedTopicPartitionsCache.put(tp, true);
+        }
+
+        // Clear records to prevent bust
+        topicPartitionWriters.get(tp).clear();
+      }
+
+      // Write records or write anyway to trigger rotation timer
       topicPartitionWriters.get(tp).write();
     }
   }
@@ -392,7 +488,8 @@ public class DataWriter {
         FileStatus fileStatusWithMaxOffset = FileUtils.fileStatusWithMaxOffset(
             storage,
             new Path(topicDir),
-            filter
+            filter,
+            true
         );
         if (fileStatusWithMaxOffset != null) {
           final Path path = fileStatusWithMaxOffset.getPath();
@@ -455,7 +552,10 @@ public class DataWriter {
     // valid. For now, we prefer the simpler solution that may result in a bit of wasted effort.
     for (TopicPartition tp : assignment) {
       try {
-        topicPartitionWriters.get(tp).close();
+        TopicPartitionWriter tpw = topicPartitionWriters.get(tp);
+        if (tpw != null) {
+          tpw.close();
+        }
       } catch (ConnectException e) {
         log.error("Error closing writer for {}. Error: {}", tp, e.getMessage());
       } finally {
@@ -504,9 +604,27 @@ public class DataWriter {
 
   public Map<TopicPartition, Long> getCommittedOffsets() {
     for (TopicPartition tp : assignment) {
-      offsets.put(tp, topicPartitionWriters.get(tp).offset());
+      TopicPartitionWriter tpw = topicPartitionWriters.get(tp);
+      if (tpw != null) {
+        offsets.put(tp, topicPartitionWriters.get(tp).offset());
+      }
     }
     return offsets;
+  }
+
+  public Map<TopicPartition, Long> getCurrentOffsets() {
+    final Map<TopicPartition, Long> currentOffsets = new HashMap<>();
+
+    for (TopicPartition tp : assignment) {
+      TopicPartitionWriter tpw = topicPartitionWriters.get(tp);
+      if (tpw != null) {
+        long offset = topicPartitionWriters.get(tp).uncommittedOffset();
+        if (offset != -1) {
+          currentOffsets.put(tp, offset);
+        }
+      }
+    }
+    return currentOffsets;
   }
 
   public TopicPartitionWriter getBucketWriter(TopicPartition tp) {
