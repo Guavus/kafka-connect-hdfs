@@ -293,7 +293,7 @@ public class TestWithMiniDFSCluster extends HdfsSinkConnectorTestBase {
         long startOffset = validOffsets[i - 1];
         long endOffset = validOffsets[i] - 1;
 
-        String filename = FileUtils.committedFileName(url, topicsDir, getDirectory(tp.topic(), tp.partition()), tp,
+        String filename = FileUtils.committedFileNameWithPath(url, topicsDir, getDirectory(tp.topic(), tp.partition()), tp,
                                                       startOffset, endOffset, extension, zeroPadFormat);
         Path path = new Path(filename);
         Collection<Object> records = dataFileReader.readData(connectorConfig.getHadoopConfiguration(), path);
@@ -311,7 +311,7 @@ public class TestWithMiniDFSCluster extends HdfsSinkConnectorTestBase {
     for (int i = 1; i < validOffsets.length; ++i) {
       long startOffset = validOffsets[i - 1];
       long endOffset = validOffsets[i] - 1;
-      expectedFiles.add(FileUtils.committedFileName(url, topicsDir, getDirectory(tp.topic(), tp.partition()), tp,
+      expectedFiles.add(FileUtils.committedFileNameWithPath(url, topicsDir, getDirectory(tp.topic(), tp.partition()), tp,
                                                     startOffset, endOffset, extension, zeroPadFormat));
     }
     return expectedFiles;

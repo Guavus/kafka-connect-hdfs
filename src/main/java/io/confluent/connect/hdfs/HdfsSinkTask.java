@@ -36,6 +36,7 @@ import io.confluent.connect.storage.schema.StorageSchemaCompatibility;
 public class HdfsSinkTask extends SinkTask {
 
   private static final Logger log = LoggerFactory.getLogger(HdfsSinkTask.class);
+
   private DataWriter hdfsWriter;
   private AvroData avroData;
 
@@ -92,6 +93,7 @@ public class HdfsSinkTask extends SinkTask {
         hdfsWriter.close();
         hdfsWriter.stop();
       }
+      throw new ConnectException("Couldn't start HdfsSinkConnector due to an unknown error.", e);
     }
   }
 
@@ -106,7 +108,34 @@ public class HdfsSinkTask extends SinkTask {
 
   @Override
   public void flush(Map<TopicPartition, OffsetAndMetadata> offsets) {
-    // Do nothing as the connector manages the offset
+
+    // Communicate the correct offsets, since we drop records in
+    // case of overload (ex: too many temp files, we might have skipped partitions)
+    hdfsWriter.getCommittedOffsets().forEach(
+        (tp, correctedOffset) -> {
+          OffsetAndMetadata o = offsets.get(tp);
+
+          // Skip null (tp is is writer, but no longer in "offsets")
+          // Write correct offsets if available
+          if (o != null && correctedOffset != o.offset()) {
+            if (correctedOffset != -1) {
+              // Write the "correct" offset
+              offsets.put(tp, new OffsetAndMetadata(correctedOffset, o.metadata()));
+            } else {
+              // No records written for this TopicPartition,
+              // remove the whole TopicPartition from offsets.
+              offsets.remove(tp);
+            }
+          }
+      }
+    );
+
+    syncTopicWriterOffsets();
+  }
+
+  private void syncTopicWriterOffsets() {
+    // Communicate offset w/ context to allow for "rewind".
+    context.offset(hdfsWriter.getCurrentOffsets());
   }
 
   @Override
@@ -116,7 +145,9 @@ public class HdfsSinkTask extends SinkTask {
 
   @Override
   public void close(Collection<TopicPartition> partitions) {
-    hdfsWriter.close();
+    if (hdfsWriter != null) {
+      hdfsWriter.close();
+    }
   }
 
   @Override

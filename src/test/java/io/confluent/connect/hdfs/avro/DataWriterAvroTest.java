@@ -28,7 +28,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
-import io.confluent.common.utils.MockTime;
 import io.confluent.common.utils.Time;
 import io.confluent.connect.hdfs.DataWriter;
 import io.confluent.connect.hdfs.FileUtils;
@@ -88,7 +87,7 @@ public class DataWriterAvroTest extends TestWithMiniDFSCluster {
       long endOffset = (i + 1) * 10 - 1;
       String tempfile = FileUtils.tempFileName(url, topicsDir, getDirectory(), extension);
       fs.createNewFile(new Path(tempfile));
-      String committedFile = FileUtils.committedFileName(url, topicsDir, getDirectory(), TOPIC_PARTITION, startOffset,
+      String committedFile = FileUtils.committedFileNameWithPath(url, topicsDir, getDirectory(), TOPIC_PARTITION, startOffset,
                                                          endOffset, extension, zeroPadFormat);
       wal.append(tempfile, committedFile);
     }
@@ -173,7 +172,7 @@ public class DataWriterAvroTest extends TestWithMiniDFSCluster {
     long[] endOffsets = {2, 5};
 
     for (int i = 0; i < startOffsets.length; ++i) {
-      Path path = new Path(FileUtils.committedFileName(url, topicsDir, directory, TOPIC_PARTITION, startOffsets[i],
+      Path path = new Path(FileUtils.committedFileNameWithPath(url, topicsDir, directory, TOPIC_PARTITION, startOffsets[i],
                                                        endOffsets[i], extension, zeroPadFormat));
       fs.createNewFile(path);
     }

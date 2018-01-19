@@ -195,9 +195,9 @@ public class TopicPartitionWriterTest extends TestWithMiniDFSCluster {
     String directory3 = partitioner.generatePartitionedPath(TOPIC, partitionField + "=" + String.valueOf(18));
 
     Set<Path> expectedFiles = new HashSet<>();
-    expectedFiles.add(new Path(FileUtils.committedFileName(url, topicsDir, directory1, TOPIC_PARTITION, 0, 2, extension, zeroPadFormat)));
-    expectedFiles.add(new Path(FileUtils.committedFileName(url, topicsDir, directory2, TOPIC_PARTITION, 3, 5, extension, zeroPadFormat)));
-    expectedFiles.add(new Path(FileUtils.committedFileName(url, topicsDir, directory3, TOPIC_PARTITION, 6, 8, extension, zeroPadFormat)));
+    expectedFiles.add(new Path(FileUtils.committedFileNameWithPath(url, topicsDir, directory1, TOPIC_PARTITION, 0, 2, extension, zeroPadFormat)));
+    expectedFiles.add(new Path(FileUtils.committedFileNameWithPath(url, topicsDir, directory2, TOPIC_PARTITION, 3, 5, extension, zeroPadFormat)));
+    expectedFiles.add(new Path(FileUtils.committedFileNameWithPath(url, topicsDir, directory3, TOPIC_PARTITION, 6, 8, extension, zeroPadFormat)));
 
     int expectedBatchSize = 3;
     verify(expectedFiles, expectedBatchSize, records, schema);
@@ -247,9 +247,9 @@ public class TopicPartitionWriterTest extends TestWithMiniDFSCluster {
     String directory = partitioner.generatePartitionedPath(TOPIC, encodedPartition);
 
     Set<Path> expectedFiles = new HashSet<>();
-    expectedFiles.add(new Path(FileUtils.committedFileName(url, topicsDir, directory, TOPIC_PARTITION, 0, 2, extension, zeroPadFormat)));
-    expectedFiles.add(new Path(FileUtils.committedFileName(url, topicsDir, directory, TOPIC_PARTITION, 3, 5, extension, zeroPadFormat)));
-    expectedFiles.add(new Path(FileUtils.committedFileName(url, topicsDir, directory, TOPIC_PARTITION, 6, 8, extension, zeroPadFormat)));
+    expectedFiles.add(new Path(FileUtils.committedFileNameWithPath(url, topicsDir, directory, TOPIC_PARTITION, 0, 2, extension, zeroPadFormat)));
+    expectedFiles.add(new Path(FileUtils.committedFileNameWithPath(url, topicsDir, directory, TOPIC_PARTITION, 3, 5, extension, zeroPadFormat)));
+    expectedFiles.add(new Path(FileUtils.committedFileNameWithPath(url, topicsDir, directory, TOPIC_PARTITION, 6, 8, extension, zeroPadFormat)));
 
     int expectedBatchSize = 3;
     verify(expectedFiles, expectedBatchSize, records, schema);
@@ -333,12 +333,12 @@ public class TopicPartitionWriterTest extends TestWithMiniDFSCluster {
     String dirPrefixFirst = partitioner.generatePartitionedPath(TOPIC, encodedPartitionFirst);
     Set<Path> expectedFiles = new HashSet<>();
     for (int i : new int[]{0, 3, 6}) {
-      expectedFiles.add(new Path(FileUtils.committedFileName(url, topicsDir, dirPrefixFirst, TOPIC_PARTITION, i, i + 2, extension, zeroPadFormat)));
+      expectedFiles.add(new Path(FileUtils.committedFileNameWithPath(url, topicsDir, dirPrefixFirst, TOPIC_PARTITION, i, i + 2, extension, zeroPadFormat)));
     }
 
     String dirPrefixLater = partitioner.generatePartitionedPath(TOPIC, encodedPartitionLater);
     for (int i : new int[]{9, 12, 15}) {
-      expectedFiles.add(new Path(FileUtils.committedFileName(url, topicsDir, dirPrefixLater, TOPIC_PARTITION, i, i + 2, extension, zeroPadFormat)));
+      expectedFiles.add(new Path(FileUtils.committedFileNameWithPath(url, topicsDir, dirPrefixLater, TOPIC_PARTITION, i, i + 2, extension, zeroPadFormat)));
     }
     verify(expectedFiles, 3, records, schema);
   }
@@ -394,13 +394,13 @@ public class TopicPartitionWriterTest extends TestWithMiniDFSCluster {
     String dirPrefixFirst = partitioner.generatePartitionedPath(TOPIC, encodedPartitionFirst);
     Set<Path> expectedFiles = new HashSet<>();
     for (int i : new int[]{0, 3, 6}) {
-      expectedFiles.add(new Path(FileUtils.committedFileName(url, topicsDir, dirPrefixFirst, TOPIC_PARTITION, i, i + 2, extension, zeroPadFormat)));
+      expectedFiles.add(new Path(FileUtils.committedFileNameWithPath(url, topicsDir, dirPrefixFirst, TOPIC_PARTITION, i, i + 2, extension, zeroPadFormat)));
     }
 
     String dirPrefixLater = partitioner.generatePartitionedPath(TOPIC, encodedPartitionLater);
     // Records 15,16,17 won't be flushed until a record with a higher timestamp arrives.
     for (int i : new int[]{9, 12}) {
-      expectedFiles.add(new Path(FileUtils.committedFileName(url, topicsDir, dirPrefixLater, TOPIC_PARTITION, i, i + 2, extension, zeroPadFormat)));
+      expectedFiles.add(new Path(FileUtils.committedFileNameWithPath(url, topicsDir, dirPrefixLater, TOPIC_PARTITION, i, i + 2, extension, zeroPadFormat)));
     }
     verify(expectedFiles, 3, records, schema);
   }
@@ -457,13 +457,13 @@ public class TopicPartitionWriterTest extends TestWithMiniDFSCluster {
     String dirPrefixFirst = partitioner.generatePartitionedPath(TOPIC, encodedPartitionFirst);
     Set<Path> expectedFiles = new HashSet<>();
     for (int i : new int[]{0, 3, 6}) {
-      expectedFiles.add(new Path(FileUtils.committedFileName(url, topicsDir, dirPrefixFirst, TOPIC_PARTITION, i, i + 2, extension, zeroPadFormat)));
+      expectedFiles.add(new Path(FileUtils.committedFileNameWithPath(url, topicsDir, dirPrefixFirst, TOPIC_PARTITION, i, i + 2, extension, zeroPadFormat)));
     }
 
     String dirPrefixLater = partitioner.generatePartitionedPath(TOPIC, encodedPartitionLater);
     // Records 15,16,17 won't be flushed until a record with a higher timestamp arrives.
     for (int i : new int[]{9, 12}) {
-      expectedFiles.add(new Path(FileUtils.committedFileName(url, topicsDir, dirPrefixLater, TOPIC_PARTITION, i, i + 2, extension, zeroPadFormat)));
+      expectedFiles.add(new Path(FileUtils.committedFileNameWithPath(url, topicsDir, dirPrefixLater, TOPIC_PARTITION, i, i + 2, extension, zeroPadFormat)));
     }
     verify(expectedFiles, 3, records, schema);
   }
@@ -553,12 +553,12 @@ public class TopicPartitionWriterTest extends TestWithMiniDFSCluster {
     String dirPrefixFirst = partitioner.generatePartitionedPath(TOPIC, encodedPartitionFirst);
     Set<Path> expectedFiles = new HashSet<>();
     for (int i : new int[]{0}) {
-      expectedFiles.add(new Path(FileUtils.committedFileName(url, topicsDir, dirPrefixFirst, TOPIC_PARTITION, i, i + 2, extension, zeroPadFormat)));
+      expectedFiles.add(new Path(FileUtils.committedFileNameWithPath(url, topicsDir, dirPrefixFirst, TOPIC_PARTITION, i, i + 2, extension, zeroPadFormat)));
     }
 
     String dirPrefixLater = partitioner.generatePartitionedPath(TOPIC, encodedPartitionLater);
     for (int i : new int[]{3}) {
-      expectedFiles.add(new Path(FileUtils.committedFileName(url, topicsDir, dirPrefixLater, TOPIC_PARTITION, i, i + 2, extension, zeroPadFormat)));
+      expectedFiles.add(new Path(FileUtils.committedFileNameWithPath(url, topicsDir, dirPrefixLater, TOPIC_PARTITION, i, i + 2, extension, zeroPadFormat)));
     }
     verify(expectedFiles, 3, records, schema);
   }

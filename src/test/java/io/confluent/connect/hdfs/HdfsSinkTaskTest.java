@@ -30,7 +30,6 @@ import java.util.Map;
 
 import io.confluent.connect.avro.AvroData;
 import io.confluent.connect.hdfs.avro.AvroDataFileReader;
-import io.confluent.connect.hdfs.avro.AvroFileReader;
 import io.confluent.connect.hdfs.storage.HdfsStorage;
 import io.confluent.connect.storage.StorageFactory;
 import io.confluent.connect.storage.common.StorageCommonConfig;
@@ -102,16 +101,16 @@ public class HdfsSinkTaskTest extends TestWithMiniDFSCluster {
 
     Map<TopicPartition, List<String>> committedFiles = new HashMap<>();
     List<String> list3 = new ArrayList<>();
-    list3.add(FileUtils.committedFileName(url, topicsDir, DIRECTORY1, TOPIC_PARTITION, 100, 200,
+    list3.add(FileUtils.committedFileNameWithPath(url, topicsDir, DIRECTORY1, TOPIC_PARTITION, 100, 200,
                                           extension, ZERO_PAD_FMT));
-    list3.add(FileUtils.committedFileName(url, topicsDir, DIRECTORY1, TOPIC_PARTITION, 201, 300,
+    list3.add(FileUtils.committedFileNameWithPath(url, topicsDir, DIRECTORY1, TOPIC_PARTITION, 201, 300,
                                           extension, ZERO_PAD_FMT));
     committedFiles.put(TOPIC_PARTITION, list3);
 
     List<String> list4 = new ArrayList<>();
-    list4.add(FileUtils.committedFileName(url, topicsDir, DIRECTORY2, TOPIC_PARTITION2, 400, 500,
+    list4.add(FileUtils.committedFileNameWithPath(url, topicsDir, DIRECTORY2, TOPIC_PARTITION2, 400, 500,
                                           extension, ZERO_PAD_FMT));
-    list4.add(FileUtils.committedFileName(url, topicsDir, DIRECTORY2, TOPIC_PARTITION2, 501, 800,
+    list4.add(FileUtils.committedFileNameWithPath(url, topicsDir, DIRECTORY2, TOPIC_PARTITION2, 501, 800,
                                           extension, ZERO_PAD_FMT));
     committedFiles.put(TOPIC_PARTITION2, list4);
 
@@ -167,7 +166,7 @@ public class HdfsSinkTaskTest extends TestWithMiniDFSCluster {
       for (int j = 1; j < validOffsets.length; ++j) {
         long startOffset = validOffsets[j - 1] + 1;
         long endOffset = validOffsets[j];
-        Path path = new Path(FileUtils.committedFileName(url, topicsDir, directory, tp,
+        Path path = new Path(FileUtils.committedFileNameWithPath(url, topicsDir, directory, tp,
                                                          startOffset, endOffset, extension,
                                                          ZERO_PAD_FMT));
         Collection<Object> records = schemaFileReader.readData(connectorConfig.getHadoopConfiguration(), path);
@@ -209,7 +208,7 @@ public class HdfsSinkTaskTest extends TestWithMiniDFSCluster {
       for (int j = 1; j < validOffsets.length; ++j) {
         long startOffset = validOffsets[j - 1] + 1;
         long endOffset = validOffsets[j];
-        Path path = new Path(FileUtils.committedFileName(url, topicsDir, directory, tp,
+        Path path = new Path(FileUtils.committedFileNameWithPath(url, topicsDir, directory, tp,
                 startOffset, endOffset, extension,
                 ZERO_PAD_FMT));
         Collection<Object> records = schemaFileReader.readData(connectorConfig.getHadoopConfiguration(), path);
@@ -223,13 +222,13 @@ public class HdfsSinkTaskTest extends TestWithMiniDFSCluster {
   }
 
   private void createCommittedFiles() throws IOException {
-    String file1 = FileUtils.committedFileName(url, topicsDir, DIRECTORY1, TOPIC_PARTITION, 0,
+    String file1 = FileUtils.committedFileNameWithPath(url, topicsDir, DIRECTORY1, TOPIC_PARTITION, 0,
                                                10, extension, ZERO_PAD_FMT);
-    String file2 = FileUtils.committedFileName(url, topicsDir, DIRECTORY1, TOPIC_PARTITION, 11,
+    String file2 = FileUtils.committedFileNameWithPath(url, topicsDir, DIRECTORY1, TOPIC_PARTITION, 11,
                                                20, extension, ZERO_PAD_FMT);
-    String file3 = FileUtils.committedFileName(url, topicsDir, DIRECTORY1, TOPIC_PARTITION2, 21,
+    String file3 = FileUtils.committedFileNameWithPath(url, topicsDir, DIRECTORY1, TOPIC_PARTITION2, 21,
                                                40, extension, ZERO_PAD_FMT);
-    String file4 = FileUtils.committedFileName(url, topicsDir, DIRECTORY1, TOPIC_PARTITION2, 41,
+    String file4 = FileUtils.committedFileNameWithPath(url, topicsDir, DIRECTORY1, TOPIC_PARTITION2, 41,
                                                45, extension, ZERO_PAD_FMT);
     fs.createNewFile(new Path(file1));
     fs.createNewFile(new Path(file2));

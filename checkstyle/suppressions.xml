@@ -45,7 +45,7 @@
     <suppress
             checks="ParameterNumber"
             files="(TopicPartitionWriter).java"
-            lines="112,148"
+            lines="155,172"
     />
 
     <suppress
@@ -62,6 +62,21 @@
     <suppress
             checks="ClassDataAbstractionCoupling"
             files="(HdfsSinkConnectorConfig).java"
+    />
+
+    <suppress
+            checks="ClassDataAbstractionCoupling"
+            files="(TopicPartitionWriter).java"
+    />
+
+    <suppress
+            checks="MethodLength"
+            files="(HdfsSinkConnectorConfig).java"
+    />
+
+    <suppress
+            checks="JavadocParagraph"
+            files=".java"
     />
 
 </suppressions>

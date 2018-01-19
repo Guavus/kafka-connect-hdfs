@@ -54,7 +54,7 @@ public class WALTest extends TestWithMiniDFSCluster {
 
     String directory = TOPIC + "/" + String.valueOf(PARTITION);
     final String tempfile = FileUtils.tempFileName(url, topicsDir, directory, extension);
-    final String committedFile = FileUtils.committedFileName(
+    final String committedFile = FileUtils.committedFileNameWithPath(
         url,
         topicsDir,
         directory,

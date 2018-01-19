@@ -14,6 +14,7 @@
 
 package io.confluent.connect.hdfs.wal;
 
+import io.confluent.connect.hdfs.FileCommitter;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.kafka.common.TopicPartition;
@@ -41,13 +42,18 @@ public class FSWAL implements WAL {
   private String logFile = null;
   private HdfsSinkConnectorConfig conf = null;
   private HdfsStorage storage = null;
+  private FileCommitter fileCommitter = null;
 
-  public FSWAL(String logsDir, TopicPartition topicPart, HdfsStorage storage)
+  public FSWAL(String logsDir,
+               TopicPartition topicPart,
+               HdfsStorage storage,
+               FileCommitter fileCommitter)
       throws ConnectException {
     this.storage = storage;
     this.conf = storage.conf();
     String url = storage.url();
     logFile = FileUtils.logFileName(url, logsDir, topicPart);
+    this.fileCommitter = fileCommitter;
   }
 
   @Override
@@ -117,9 +123,7 @@ public class FSWAL implements WAL {
           for (Map.Entry<WALEntry, WALEntry> entry: entries.entrySet()) {
             String tempFile = entry.getKey().getName();
             String committedFile = entry.getValue().getName();
-            if (!storage.exists(committedFile)) {
-              storage.commit(tempFile, committedFile);
-            }
+            fileCommitter.commitFile(tempFile, committedFile);
           }
         } else {
           WALEntry mapKey = new WALEntry(key.getName());

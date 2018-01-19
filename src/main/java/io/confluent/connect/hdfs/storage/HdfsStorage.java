@@ -16,12 +16,13 @@
 
 package io.confluent.connect.hdfs.storage;
 
+import io.confluent.connect.hdfs.FileCommitter;
 import org.apache.avro.file.SeekableInput;
 import org.apache.avro.mapred.FsInput;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.PathFilter;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.errors.ConnectException;
 
@@ -51,17 +52,11 @@ public class HdfsStorage
   }
 
   public HdfsStorage(HdfsSinkConnectorConfig conf,  String url) throws IOException {
-    this.conf = conf;
-    this.url = url;
-    fs = FileSystem.newInstance(URI.create(url), conf.getHadoopConfiguration());
-  }
-
-  public List<FileStatus> list(String path, PathFilter filter) {
-    try {
-      return Arrays.asList(fs.listStatus(new Path(path), filter));
-    } catch (IOException e) {
-      throw new ConnectException(e);
-    }
+    this(
+      conf,
+      url,
+      FileSystem.newInstance(URI.create(url), conf.getHadoopConfiguration())
+    );
   }
 
   @Override
@@ -114,6 +109,22 @@ public class HdfsStorage
     renameFile(tempFile, committedFile);
   }
 
+  public void copy(String src, String dst, boolean overwrite) {
+    try {
+      FileUtil.copy(
+          fs,
+          new Path(src),
+          fs,
+          new Path(dst),
+          false,
+          overwrite,
+          conf.getHadoopConfiguration());
+
+    } catch (IOException e) {
+      throw new ConnectException(e);
+    }
+  }
+
   @Override
   public void delete(String filename) {
     try {
@@ -134,8 +145,8 @@ public class HdfsStorage
     }
   }
 
-  public WAL wal(String topicsDir, TopicPartition topicPart) {
-    return new FSWAL(topicsDir, topicPart, this);
+  public WAL wal(String topicsDir, TopicPartition topicPart, FileCommitter fc) {
+    return new FSWAL(topicsDir, topicPart, this, fc);
   }
 
   @Override
@@ -153,8 +164,10 @@ public class HdfsStorage
       return;
     }
     try {
+
       final Path srcPath = new Path(sourcePath);
       final Path dstPath = new Path(targetPath);
+
       if (fs.exists(srcPath)) {
         fs.rename(srcPath, dstPath);
       }
